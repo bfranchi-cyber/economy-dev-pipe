@@ -1,6 +1,6 @@
 ---
 title: Agentflow — Jira-to-PR agentic pipeline for VS Code Copilot (MVP)
-status: draft
+status: final
 created: 2026-11-12
 updated: 2026-11-13
 ---
@@ -10,17 +10,19 @@ updated: 2026-11-13
 
 ## 0. Document Purpose
 
-This PRD is the build input for a personal tool. It is written so a code-generation workflow can turn it into epics, stories and code without re-deriving intent. Vocabulary is fixed in §3 Glossary and must be used verbatim. §4.0 lays out the pipeline as numbered sequential steps and FR-4 holds the normative Stage Graph edge list; features are grouped in §4.1–4.13 with globally numbered FRs (FR-1 … FR-51), each with testable consequences. FR IDs are stable: FRs added after the first draft (FR-40 onward) sit in the feature they belong to, so they appear out of numeric order. Inferred items carry inline `[ASSUMPTION]` tags, indexed in §12. Risks are in §10.
+This PRD is the build input for a personal tool, written so a code-generation workflow can turn it into epics, stories and code without re-deriving intent. Use the §3 Glossary terms verbatim. §4.0 is the readable pipeline overview; FR-4 is the normative Stage Graph. Features (§4.1–4.13) carry globally numbered FRs (FR-1 … FR-51) with testable consequences. FR IDs are stable: FR-40 onward were added later and sit in the feature they belong to, out of numeric order. Inferred items carry `[ASSUMPTION]` tags, indexed in §12.
 
-Inputs it builds on: the v5 decision doc `agentic-workflow-mvp.md` (2026-11-11), the answered question bank `opportunity-questions.md`, the AI-DLC token review `research/aidlc-token-review.md`, the finalize reviews in this folder, and the decision log `.memlog.md`. Technical detail (tool list, file layout, YAML schemas, build order, design rationale) lives in `addendum.md`. Where this PRD and v5 disagree, this PRD wins.
+**Revision 2026-11-13: synced with architecture spine rev 2** (`architecture/architecture-develop-pipeline-2026-11-13/ARCHITECTURE-SPINE.md`). One long-lived process (the MCP server); no Daemon and no poller (`start-ticket` queries Jira); CI watch and notifications run inside the MCP server; Server Record integrity comes from living outside the workspace plus Approved Version hashes, with no HMAC; the CLI one-time-code Gate channel is conditional; parallel Goal execution (§4.11) is post-MVP; the Failure Signature ignores line numbers. **Refined the same day** to match the spine's later decisions: Repo Lock staleness by heartbeat, only the Memlog truncated on resume, discarded Runs kept as Discard Refs (not git stash) with journaled restore, `run_report` replay, a `runs` map with parallel Reviewers, `confirm_action` Gates for stop/skip/restart, `bundle_get`, `metrics.yml`, an ordered Effect Journal, `.agentflow/` excluded from Snapshots and the clean-tree check, and git run with the real environment minus tokens. The PRD now matches the refined spine.
+
+Inputs: the v5 decision doc `agentic-workflow-mvp.md` (2026-11-11), the answered question bank `opportunity-questions.md`, the AI-DLC token review `research/aidlc-token-review.md`, the finalize reviews in this folder, and the decision log `.memlog.md`. Technical detail (tool list, file layout, YAML schemas, build order, design rationale) is in `addendum.md`. Where this PRD and v5 disagree, this PRD wins.
 
 ## 1. Vision
 
-Agentflow turns an assigned Jira story into a reviewed, tested pull request inside VS Code Copilot agent mode, with the developer acting only at a few deliberate decision points. It takes AI-DLC's lifecycle architecture (an explicit stage graph, gated approvals, one record per piece of work, deterministic checks that can block) and BMAD's lean working habits (a condensed spec, an append-only decision log, walkthrough-style review, recorded pitfalls). Both are **distilled** into Agentflow's own tools and short Persona prompts; neither framework's skills or engine are invoked at runtime, because their prose would blow the per-step token budget.
+Agentflow turns an assigned Jira story into a reviewed, tested pull request inside VS Code Copilot agent mode; the developer acts only at a few deliberate decision points. It takes AI-DLC's lifecycle architecture (an explicit stage graph, gated approvals, one record per piece of work, blocking deterministic checks) and BMAD's lean working habits (a condensed spec, an append-only decision log, walkthrough-style review, recorded pitfalls). Both are **distilled** into Agentflow's own tools and short Persona prompts (§6); neither framework's skills or engine run at runtime, because their prose would blow the per-step token budget.
 
-Its defining constraint is **token economy through determinism**. Everything that can be computed (polling, ordering, scheduling, running tests and checks, building trace matrices, watching CI, moving Jira cards) is done by TypeScript code with zero model calls, and the server chains those steps itself so the orchestrating chat does not spend a turn on them. Models are used only where judgment is unavoidable: writing the Spec, planning, writing and refactoring code, reviewing behaviour against requirements, and the judgment parts of the Walkthrough and learning proposals. Cheap models do most of that work; stronger models are used only when a human approves an Escalation.
+The defining constraint is **token economy through determinism**. Everything computable (Jira queries, ordering, scheduling, running tests and checks, building trace matrices, watching CI, moving Jira cards) is TypeScript code with zero model calls, and the server chains those steps itself so the orchestrating chat spends no turn on them. Models are used only where judgment is unavoidable: writing the Spec, planning, writing and refactoring code, reviewing behaviour against requirements, and the judgment parts of the Walkthrough and learning proposals. Cheap models do most of that work; stronger models run only when a human approves an Escalation.
 
-The developer starts the pipeline by moving a Ticket to In Execution in Jira. On each pass they approve at three fixed Gates: after the Spec, after the Plan (or Patch Plan), and before the push. Additional decisions appear only when triggered: an Escalation request from a stuck agent, a Correct-Course Proposal, or an Ask Human checkpoint when a loop repeats the same failure. Approval comes through a prompt only a human can answer, so no agent can approve its own work.
+The developer starts the pipeline by moving a Ticket to In Execution in Jira. On each pass they approve at three fixed Gates: after the Spec, after the Plan (or Patch Plan), and before the push. Other decisions appear only when triggered: an Escalation request, a Correct-Course Proposal, or an Ask Human checkpoint when a loop repeats the same failure. Approval comes through a prompt only a human can answer, so no agent can approve its own work.
 
 ## 2. Target User
 
@@ -41,7 +43,7 @@ The developer starts the pipeline by moving a Ticket to In Execution in Jira. On
 ### 2.3 Key User Journey
 
 - **UJ-1. Bfranchi ships PROJ-123 between meetings.**
-  Bfranchi moves PROJ-123 to In Execution in Jira. Within two minutes the Daemon picks it up, creates its Intent Record, and a desktop notification says "PROJ-123 ready, run start-ticket PROJ-123". They run `start-ticket PROJ-123` in Copilot; Agentflow creates the Feature Branch. A few minutes later a Gate prompt shows the Spec: six Given/When/Then ACs, one tagged `[assumption]`. They accept the Assumption, then approve the Spec. The Plan follows: two Goals, eight Checklist Items, eleven Scenarios. They approve. Each Goal is implemented test-first in separate Runs that each commit. Checks and the Trace Matrix are clean; three Reviewers and a Synthesizer report every AC met. The push prompt shows a Walkthrough: what changed, what to look at, how to test. They approve the push. CI fails on one integration test; a desktop notification tells them, and a Patch Plan arrives that reuses the approved Spec. They approve it, the fix lands, they approve the second push, CI goes green, and the card moves to In Tests with a PR link.
+  Bfranchi moves PROJ-123 to In Execution in Jira, then runs `start-ticket` in Copilot. It lists their In Execution Tickets that have no Intent Record; they pick PROJ-123, and Agentflow creates its Intent Record and the Feature Branch. A few minutes later a Gate prompt shows the Spec: six Given/When/Then ACs, one tagged `[assumption]`. They accept the Assumption, then approve the Spec. The Plan follows: two Goals, eight Checklist Items, eleven Scenarios. They approve. Each Goal is implemented test-first in separate Runs that each commit. Checks and the Trace Matrix are clean; three Reviewers and a Synthesizer report every AC met. The push prompt shows a Walkthrough: what changed, what to look at, how to test. They approve the push. CI fails on one integration test; a desktop notification tells them, and a Patch Plan arrives that reuses the approved Spec. They approve it, the fix lands, they approve the second push, CI goes green, and the card moves to In Tests with a PR link.
   **Edge case:** the implementer reports Status Code `2` on Goal G2 after two different approaches. Bfranchi sees the Handoff summary in a Gate prompt, approves Escalation to the `high` Tier, and the escalation Run resolves it in one pass.
 
 ## 3. Glossary
@@ -50,11 +52,11 @@ The developer starts the pipeline by moving a Ticket to In Execution in Jira. On
 - **Ticket** — A Jira issue assigned to the user in status In Execution. One Ticket has exactly one active Intent Record.
 - **Intent Record** — Everything about one Ticket, in two parts: the Ticket Workspace and the Server Record.
 - **Ticket Workspace** — The folder `.agentflow/tickets/<KEY>/` in the repo, git-ignored, holding human-readable documents agents may read: Ticket snapshot, Spec, Plan, Patch Plans, Correct-Course Proposals, Handoffs, Walkthrough, Trace Matrix, Verdict, Failure Payloads.
-- **Server Record** — The authoritative, server-owned part of an Intent Record, stored outside the workspace (per-user state directory) and integrity-protected: State, Gate Records, Approved Versions, Snapshots, Claims, Run Reports, Memlog, Tool-Call Log, Run Metrics. Agents never write it directly.
+- **Server Record** — The authoritative, server-owned part of an Intent Record, stored outside the workspace (`~/.agentflow/<repo-id>/<KEY>/`) and committed atomically by the server: State, Gate Records, Approved Versions, Snapshots, Run Reports, Memlog, Tool-Call Log, Run Metrics (and Claims, post-MVP). Agents never write it directly; Copilot edit tools reach only the workspace.
 - **Feature Branch** — The git branch `agentflow/<KEY>` created for a Ticket from the configured base branch. All commits for the Ticket go here.
 
 **Pipeline engine**
-- **Stage** — One node of the Stage Graph (`spec`, `plan`, `implement`, `checks`, `wave_synthesis`, `trace`, `validate`, `push`, `ci`, `patch_plan`, `correct_course`, `done`, `stopped`, `skipped`).
+- **Stage** — One node of the Stage Graph (`spec`, `plan`, `implement`, `checks`, `wave_synthesis` (post-MVP), `trace`, `validate`, `push`, `ci`, `patch_plan`, `correct_course`, `done`, `stopped`, `skipped`).
 - **Tool-owned Stage** — A Stage the server executes itself with no model (`checks`, `trace`, `ci`, `done`, plus triage and the deterministic parts of `push`). `state_advance` chains through them.
 - **Goal Phase** — The sub-step of `implement` for one Goal: `red`, `triage`, `green`, `refactor`.
 - **Stage Graph** — The declarative definition of Stages, Goal Phases, Gates and edges (from, to, condition), read by the State Tool.
@@ -66,15 +68,16 @@ The developer starts the pipeline by moving a Ticket to In Execution in Jira. On
 - **Input Bundle** — The explicit set of paths, Context Slices and rules `state_get` hands to a Run. A Run receives nothing else.
 - **Context Slice** — A bounded excerpt of Project Context, Preferences Doc, Pitfalls Doc or Memlog included in an Input Bundle.
 - **Snapshot** — A git tree hash of the working tree (excluding git-ignored paths) recorded by the server at a defined moment.
-- **Daemon** — The background process `agentflow daemon`, separate from the MCP server, that runs the Jira poller and the CI watch and sends desktop notifications.
-- **Launcher** — The deterministic part of the State Tool that starts parallel Runs in a Wave (FR-32).
+- **MCP server** — The single long-lived Agentflow process, started by VS Code from `.vscode/mcp.json`. It serves every tool, runs the CI watch timer and sends desktop notifications. It holds the Repo Lock for its whole life.
+- **Repo Lock** — The file `~/.agentflow/<repo-id>/lock` the MCP server holds; only the holder writes Server Records for that repo.
+- **Launcher** — *(post-MVP)* The deterministic part of the State Tool that starts parallel Runs in a Wave (FR-32).
 
 **Gates and decisions**
-- **Gate** — A decision point that cannot be passed without a Gate Record. Gate kinds: `spec`, `plan` (covers Plans and Patch Plans), `correct_course`, `escalation`, `push`, `ask_human`.
-- **Gate Record** — The stored result of one human decision at a Gate: id `GR-n`, kind, decision, channel, timestamp, the SHA-256 of what was shown, note. Created only by the server from a human response.
+- **Gate** — A decision point that cannot be passed without a Gate Record. Gate kinds: `spec`, `plan` (covers Plans and Patch Plans), `correct_course`, `escalation`, `push`, `ask_human`, `confirm_action` (confirms `stop_ticket`, `skip_ticket` or a restart before it acts).
+- **Gate Record** — The stored result of one human decision at a Gate, id `GR-n` (fields in FR-8). Created only by the server from a human response.
 - **Approved Version** — The server-held copy and hash of an artifact as of its most recent `approve` Gate Record of that kind. "Matching" an approval means: the latest Gate Record of that kind is `approve` and its hash equals the current artifact.
-- **Wait Reason** — Why a Ticket is paused (AI-DLC calls this "park": the engine records why it is idle and what resumes it): `not_started | gate_spec | gate_plan | gate_correct_course | gate_escalation | gate_push | ask_human | ci_running`. State holds a queue of pending Wait Reasons; Gates are shown one at a time.
-- **Ask Human** — A Gate of kind `ask_human` raised by the server (Loop Checkpoint, unattributed change, CI non-result, remote divergence, artifact changed) or by a Persona (ambiguity, wrong-looking plan, Escalation returned `cannot`). Options always include continue, escalate, edit plan and stop.
+- **Wait Reason** — Why a Ticket is paused and what resumes it (values in FR-6). State holds a queue of pending Wait Reasons; Gates are shown one at a time.
+- **Ask Human** — A Gate of kind `ask_human` raised by the server or by a Persona when a human decision is needed (reasons and options in FR-45).
 - **Loop Checkpoint** — The automatic Ask Human raised when the same Failure Signature repeats N times on any loop (default N = 3).
 
 **Documents**
@@ -89,9 +92,9 @@ The developer starts the pipeline by moving a Ticket to In Execution in Jira. On
 - **Checklist Item** — A small implementation step under a Goal; the logical basis for one or more Scenarios.
 - **Scenario** — A Given/When/Then test description under a Checklist Item, id `S<goal>.<item>.<n>`, tagged `new | change | existing`.
 - **Wave** — A set of Goals the scheduler allows to run together, computed from `depends_on`, `parallel_group` and file overlap.
-- **Walkthrough** — The push-Gate summary (`walkthrough.md`): purpose of the change, what to look at closely, how to test, commit list, files, Trace Matrix summary.
+- **Walkthrough** — The `push` Gate summary (`walkthrough.md`; contents in FR-26).
 - **Handoff** — The schema-validated Escalation brief (`handoffs/H-n.yml`): scope, progress, attempts and ask. (Not to be confused with the Input Bundle, which is every Run's brief.)
-- **Claim** — A record a parallel Run posts before it acts: its Goal, the files it will create or modify, and its intent. Open while the Run runs; other Runs must not edit claimed files.
+- **Claim** — *(post-MVP)* A record a parallel Run posts before it acts: its Goal, the files it will create or modify, and its intent. Open while the Run runs; other Runs must not edit claimed files.
 
 **Agents and models**
 - **Persona** — A role prompt composed with the shared senior-engineer base prompt: `conductor`, `intake`, `planner`, `implementer`, `refactorer`, `reviewer`, `synthesizer`, `walkthrough`, `curator`, `escalation`.
@@ -100,52 +103,45 @@ The developer starts the pipeline by moving a Ticket to In Execution in Jira. On
 - **Escalation** — Re-running a stuck Run's task on a stronger model (default the `high` Tier) as an `escalation` Run, after an approved `escalation` Gate.
 - **Reviewer** — A cheap-Tier Persona that reviews one Review Bundle against the Spec and Plan in a fresh context.
 - **Review Bundle** — The inlined, size-capped content one Reviewer receives (FR-22).
-- **Synthesizer** — The medium-Tier Persona that merges Reviewer outputs (or a parallel Wave's changes) into one verdict and resolves conflicts.
+- **Synthesizer** — The medium-Tier Persona that merges Reviewer outputs (and, post-MVP, a parallel Wave's changes) into one verdict and resolves conflicts.
 
 **Checks and evidence**
 - **Check** — A deterministic lint, type or test run executed by the server, never by a model.
 - **Failure Payload** — The trimmed, shared-schema output of a failed Check, test run or CI job.
-- **Failure Signature** — The hash of (test or check id, `location`, first message line), or `missing_report` for a Run that ended without a Run Report. Used to detect repeats.
+- **Failure Signature** — SHA-256 of (test or check id, file path, normalized first message line), excluding line and column so a moved failure still counts as a repeat; or `missing_report` for a Run that ended without a Run Report. Used to detect repeats.
 - **Trace Matrix** — The deterministic AC → Goal → Checklist Item → Scenario → test → result table (`trace.yml`).
 - **Memlog** — The append-only decision log of an Intent Record, written only by the server; agents read slices of it instead of transcripts.
 - **Preferences Doc** — Repo-level file (`.agentflow/preferences.md`) of the user's accepted preferences.
 - **Pitfalls Doc** — Repo-level file (`.agentflow/pitfalls.md`) of accepted known agent mistakes.
 - **Project Context** — The AGENTS.md block with stable repo knowledge, delivered to Runs as a Context Slice.
-- **Run Metrics** — Local per-Ticket record of runs, models, estimated tokens, counters, decisions and outcome.
+- **Run Metrics** — Local per-Ticket record of runs, models, estimated tokens, counters, decisions and outcome, stored as `metrics.yml` in the Server Record directory.
+- **Discard Ref** — The git ref `refs/agentflow/<KEY>/<run-id>` under which the server keeps a discarded Run's work before restoring its start Snapshot. Replaces `git stash`.
+- **Effect Journal** — The ordered `pending` list of side effects (commit, push, PR, Jira transition or comment, Snapshot restore, Discard Ref) committed in `record.yml` together with the new State before the first effect runs; resumed first on startup and on every `state_get`.
 - **Tool-Call Log** — Append-only server log of every MCP tool call received.
 
 ## 4. Features
 
 ### 4.0 Pipeline Overview
 
-Every Ticket goes through the same steps in this order. Each step is a Stage in the Stage Graph; FR-4 is the normative edge list and this table is its readable form. The State Tool enforces the order; tool-owned steps run inside the server; the Conductor only launches Runs and opens Gates. The features below (4.1–4.13) specify each step.
+Every Ticket goes through the same steps in this order. Each step is a Stage; this table is the readable form of FR-4, which is normative and lists every edge, including all loop-backs. The State Tool enforces the order, Tool-owned Stages run inside the server, and the Conductor only launches Runs and opens Gates.
 
 | # | Step (Stage) | What happens | Done by | Human decision | Specified in |
 |---|---|---|---|---|---|
 | 0 | Trigger | Bfranchi moves the Ticket to In Execution in Jira | Human | | §4.1 |
-| 1 | Intake | Daemon finds the Ticket, creates the Intent Record, notifies; Bfranchi runs `start-ticket <KEY>`; Feature Branch and baseline Snapshot created | Tool | | FR-1–3, FR-43 |
+| 1 | Intake | Bfranchi runs `start-ticket` (lists In Execution Tickets without an Intent Record) or `start-ticket <KEY>`; Intent Record, Ticket snapshot, Feature Branch and baseline Snapshot created | Tool | | FR-1–3, FR-43 |
 | 2 | Spec (`spec`) | Ticket, comments and depth-1 linked issues condensed into a Spec with Given/When/Then ACs; Assumptions tagged | intake (cheap) | **`spec` Gate** | FR-11–12 |
 | 3 | Plan (`plan`) | Spec broken into Goals → Checklist Items → Scenarios; Waves computed | planner (medium) + tool | **`plan` Gate** | FR-13–14 |
-| 4 | Implement (`implement`) | Per Goal, in Wave order, one Run per Goal Phase: `red` Run → `triage` (tool) → `green` Run → Checks → `refactor` Run → Checks. Every Run ends with a Run Report and commits on `0` | implementer, refactorer (cheap) + tools | `escalation` Gate on Status Code `2` | FR-15–18, FR-44, FR-47, FR-24–25 |
+| 4 | Implement (`implement`) | Per Wave: every Goal's `red` Run, then one batched `triage` (tool); then per Goal: `green` Run → Checks → `refactor` Run → Checks. Each Run ends with a Run Report and commits on `0` | implementer, refactorer (cheap) + tools | `escalation` Gate on Status Code `2` | FR-15–18, FR-44, FR-47, FR-24–25 |
 | 5 | Checks (`checks`) | Lint, types and the full test suite after each `green` and `refactor` Run; failures only | Tool | | FR-19–20 |
-| 5b | Wave synthesis (`wave_synthesis`) | Parallel mode only: combined Wave change checked for conflicts before its Checks | Synthesizer (medium) | | FR-33 |
+| 5b | Wave synthesis (`wave_synthesis`) | **Post-MVP.** Parallel mode only: combined Wave change checked for conflicts before its Checks | Synthesizer (medium) | | FR-33 |
 | 6 | Trace (`trace`) | AC → Goal → Checklist Item → Scenario → test → result; any gap blocks | Tool | | FR-21 |
 | 7 | Validate (`validate`) | Parallel Reviewers per Review Bundle, then one Synthesizer verdict per AC and Goal; validated HEAD recorded | Reviewers (cheap), Synthesizer (medium) | | FR-22–23 |
 | 8 | Push (`push`) | Walkthrough built (template + cheap model); on approval, Feature Branch pushed and PR opened | walkthrough (cheap) + tools | **`push` Gate** | FR-26 |
-| 9 | CI (`ci`) | Daemon watches GitHub Actions in the background; notifies on a terminal state | Tool | Ask Human on cancelled / timed out / no run | FR-27 |
+| 9 | CI (`ci`) | The MCP server polls GitHub Actions on a timer; notifies on a terminal state; one check on resume | Tool | Ask Human on cancelled / timed out / no run | FR-27 |
 | 10a | Patch (`patch_plan` / `correct_course`) | On CI failure: Patch Plan against the unchanged Spec, or a Correct-Course Proposal | planner (medium) | **`plan` Gate** or **`correct_course` Gate** | FR-28–29 |
 | 10b | Done (`done`) | On CI success: Ticket moved to In Tests, PR link commented, Run Metrics saved | Tool | | FR-30, FR-35 |
 
-At any point an Ask Human Gate can appear (Loop Checkpoint, unattributed change, Persona request; FR-45). `stopped` and `skipped` are terminal Stages (FR-46).
-
-**Main loop-backs (full list in FR-4):**
-- Checks failure → the same Goal's `green` (or `refactor`) Phase, with the Failure Payloads.
-- Trace gap or validation `partial`/`missing` → the affected Goal's `green` Phase, then forward through Checks, Trace and Validate again.
-- Status Code `1` → the same Goal Phase in a fresh context on the next cheap model.
-- Any change after `validate` → back to `trace` and `validate` before the `push` Gate.
-- Approved Patch Plan → `implement` for the new or changed Goals, then steps 5–8.
-- Approved Correct-Course Proposal → `spec` or `plan` revision and its Gate, then `implement`.
-- The same Failure Signature N times on any loop → Ask Human.
+An Ask Human Gate can appear at any point (FR-45). `stopped` and `skipped` are terminal Stages (FR-46).
 
 ```
 In Execution ─► 1 Intake ─► 2 Spec [H] ─► 3 Plan [H] ─► 4 Implement ⇄ 5 Checks ─► (5b Wave synth) ─► 6 Trace ─► 7 Validate ─► 8 Push [H] ─► 9 CI
@@ -157,46 +153,48 @@ In Execution ─► 1 Intake ─► 2 Spec [H] ─► 3 Plan [H] ─► 4 Implem
 Any loop repeating the same failure N times ─► Ask Human [H] (continue / escalate / edit plan / stop)
 ```
 
-`[H]` = Bfranchi decides through a Gate prompt (FR-8). Everything without `[H]` runs without stopping.
+`[H]` = Bfranchi decides through a Gate prompt (FR-8). Everything without `[H]` runs without stopping. Step 5b is post-MVP (§4.11).
 
 ### 4.1 Ticket Intake
 
-**Description:** The user signals intent in Jira itself: moving a Ticket to In Execution is the trigger, so no custom label or Jira admin setup is needed. The Daemon finds Tickets assigned to the user in In Execution that have no Intent Record yet, creates their Intent Records and notifies the user. The user then starts the pipeline in Copilot with `start-ticket <KEY>`. No model is called. Realizes UJ-1.
+**Description:** Moving a Ticket to In Execution in Jira is the trigger. There is no background poller: when the user runs `start-ticket` in Copilot, the MCP server queries Jira once, lists the eligible Tickets, and creates the Intent Record of the one the user starts. No model is called. Realizes UJ-1.
 
-#### FR-1: Poll Jira for eligible Tickets
+#### FR-1: List eligible Tickets on demand
 
-The Daemon polls Jira with a configurable JQL query on a configurable interval and selects Tickets with no existing Intent Record.
+`start-ticket` without a key queries Jira with a configurable JQL query and lists Tickets that have no Intent Record; `start-ticket <KEY>` starts one directly.
 
 **Consequences (testable):**
-- Default JQL is `assignee = currentUser() AND status = "In Execution"`; default interval is 120 s; both are read from config.
+- Default JQL is `assignee = currentUser() AND status = "In Execution"`, read from config. The query runs only when `start-ticket` runs; there is no polling interval.
 - The query uses only standard fields (assignee, status); it needs no custom label, field or Jira admin rights.
-- A Ticket that already has an Intent Record in any Stage (including `skipped`, `stopped` and `done`) is never selected again.
-- Selecting a Ticket only prepares it; the pipeline runs only when the user runs `start-ticket <KEY>`, so Tickets moved to In Execution for manual work cost nothing. `agentflow skip <KEY>` moves a not-started Ticket to the terminal Stage `skipped` (FR-46).
-- Only one Daemon instance polls per user; a second instance exits with an error naming the lock file.
-- Jira credentials are read only from environment variables (`JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`); startup fails with a named error if any is missing.
-- A Jira API failure is logged and retried on the next interval; it never crashes the Daemon.
-- Polling sits behind a `TicketSource` interface, so a webhook source can replace it without changes elsewhere.
+- `start-ticket` without a key lists the repo's active Ticket first (if one is between `spec` and a terminal Stage, to resume it), then the In Execution Tickets with no Intent Record, and ends; the user then runs `start-ticket <KEY>`.
+- A Ticket that already has an Intent Record in any Stage (including `skipped`, `stopped`, `done` and archived records from a restart) is never listed as new.
+- Tickets moved to In Execution for manual work cost nothing: nothing is created until the user starts one. The MCP tool `skip_ticket <KEY>` records a Ticket as `skipped` so it stops being listed (FR-46).
+- One MCP server per repo: at startup it retries for up to 10 s, then takes the Repo Lock (`~/.agentflow/<repo-id>/lock`, exclusive create, holding its pid) and touches the lock file every 30 s while it runs.
+- A lock is stale when its file mtime is older than 90 s, regardless of pid (Windows reuses pids); a stale lock is replaced. A fresh lock makes the second server exit with an error naming the holder; after a crash, a start within 90 s fails with that message and succeeds afterwards.
+- `agentflow unlock` removes a stale lock by hand; it refuses while the lock is fresh.
+- Jira credentials are read only from environment variables (`JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`), passed to the MCP server through the `env` block of `.vscode/mcp.json` (inputs or inherited user env, never committed); a Jira tool call fails with a named error if any is missing.
+- Every Jira and GitHub call is outbound only. A failure (for example a VPN drop) returns a typed error, leaves State unchanged, and the user retries with the next `start-ticket`.
+- The Jira query sits behind a `TicketSource` interface, so a webhook source can replace it later without changes elsewhere.
 
 #### FR-2: Create the Intent Record
 
-On selecting a Ticket, the Daemon writes the Ticket snapshot to the Ticket Workspace and an initial State and Memlog to the Server Record.
+`start-ticket <KEY>` writes the Ticket snapshot to the Ticket Workspace and an initial State and Memlog to the Server Record.
 
 **Consequences (testable):**
 - `ticket.json` contains summary, description, comments, link metadata, attachment metadata, and the summary and description of each depth-1 linked Jira issue. External URLs are listed but not fetched.
-- State starts at Stage `spec` with Wait Reason `not_started` and all counters at 0.
-- The Memlog's first entry records Ticket selection.
+- State starts at Stage `spec` with all counters at 0, and the intake Run is launched in the same `start-ticket` call (after FR-43's git checks).
+- The Memlog's first entry records the Ticket start.
 
 #### FR-3: Notify
 
-The Daemon sends a desktop notification naming the Ticket and the exact command to run. It does not change the Ticket's Jira status; the user already moved it to In Execution.
+Superseded by FR-1 and FR-49 (revision 2026-11-13): there is no "ticket ready" notification, because the user starts Tickets themselves.
 
 **Consequences (testable):**
-- The notification text is "<KEY> ready, run start-ticket <KEY>".
 - No Jira transition is made at intake; the only transition the pipeline makes is to the configured "done" status (FR-30).
 
 ### 4.2 Pipeline Engine
 
-**Description:** A Stage Graph defines Stages, Goal Phases, Gates and edges. The State Tool reads it and the State and returns exactly one next action. Tool-owned Stages run inside the server, chained by `state_advance`, so the Conductor only ever launches a Run, opens a Gate, or stops. This replaces AI-DLC's hook-driven engine with tool calls the agent must make, keeping the orchestrator's context small. Realizes UJ-1.
+**Description:** The State Tool reads the Stage Graph and the State and returns exactly one next action. Tool-owned Stages run inside the server, chained by `state_advance`, so the Conductor only launches a Run, opens a Gate, or stops, and its context stays small. Realizes UJ-1.
 
 #### FR-4: Declarative Stage Graph
 
@@ -204,45 +202,52 @@ The Stage Graph is a YAML file defining Stages, Goal Phases, their owner (tool o
 
 | From | Condition | To |
 |---|---|---|
-| `spec` (Wait `not_started`) | `start-ticket <KEY>` | `spec` intake Run |
+| (no Intent Record) | `start-ticket <KEY>` | `spec` intake Run |
 | `spec` | `spec` Gate `approve` / `edit` / `reject` | `plan` / intake Run with note → `spec` Gate / `stopped` |
 | `plan` | `plan` Gate `approve` / `edit` / `reject` | `implement` / planner Run with note → `plan` Gate / `stopped` |
-| `implement:red` | Run Report `0` | `implement:triage` (tool) |
-| `implement:triage` | no anomaly / wrong-reason failure / other anomaly | `implement:green` / `implement:red` with payload / Ask Human |
-| `implement:green` | Run Report `0` | `checks` (sequential) or Wave wait (parallel) |
+| `implement:red` | Run Report `0`, more Goals in the Wave without a finished `red` | next Goal's `implement:red` |
+| `implement:red` | Run Report `0`, every Goal in the Wave has finished `red` | `implement:triage` (tool, one batch for the Wave) |
+| `implement:triage` | per Goal: no anomaly / wrong-reason failure / other anomaly | that Goal's `implement:green` / that Goal's `implement:red` with payload, then triage again for that Goal / Ask Human |
+| `implement:green` | Run Report `0` | `checks` (post-MVP parallel mode: Wave wait) |
 | `checks` after `green` | pass / fail | `implement:refactor` / `implement:green` with payloads |
 | `implement:refactor` | Run Report `0` | `checks` |
 | `checks` after `refactor` | pass / fail | Goal `done`, next Goal or end of Wave / `implement:refactor` with payloads |
 | any Goal Phase Run | Run Report `1` or none | same Goal Phase, next cheap model |
 | any Goal Phase Run | Run Report `2` | `escalation` Gate |
-| `escalation` Gate | `approve` / `edit` / `reject` | escalation Run / same Goal Phase with guidance / `stopped` |
+| `escalation` Gate | `approve` / `edit` / `reject` | escalation Run on the chosen model / same Goal Phase, fresh cheap Run with the note as guidance / `stopped` |
 | escalation Run | `resolved` / `partial` / `cannot` | `checks` for that Goal Phase / Ask Human / Ask Human |
-| end of Wave (parallel) | — | `wave_synthesis` → pass: `checks` for each Goal of the Wave; conflict: affected Goals' `green` |
+| end of Wave (post-MVP parallel mode) | — | `wave_synthesis` → pass: `checks` for each Goal of the Wave; conflict: affected Goals' `green` |
 | last Goal `done` | — | `trace` |
 | `trace` | no gap / gap | `validate` / affected Goal's `green` |
 | `validate` | all `met` / any `partial` or `missing` | `push` / affected Goals' `green` |
-| `push` | `push` Gate `approve` / `edit:walkthrough` / `edit:rework` / `reject` | `ci` / walkthrough Run → `push` Gate / `patch_plan` with note / `stopped` |
+| `push` | `push` Gate `approve` / `edit:walkthrough` / `edit:rework` / `reject` | push and PR (FR-26) → `ci` / walkthrough Run → `push` Gate / `patch_plan` with note / `stopped` |
 | `push` or `ci` | HEAD ≠ validated HEAD | `trace` |
 | `ci` | success / failure / cancelled, timed out, no run, max wait | `done` / `patch_plan` / Ask Human |
 | `patch_plan` | planner writes Patch Plan / Correct-Course Proposal | `plan` Gate / `correct_course` Gate |
 | `correct_course` Gate | `approve` / `edit` / `reject` | `spec` or `plan` revision Run → its Gate / planner redraft → `correct_course` Gate / `patch_plan` with note |
 | Ask Human | continue / escalate / edit plan / stop | resume where raised / `escalation` Gate / `patch_plan` with note / `stopped` |
-| any non-terminal Stage | `agentflow stop <KEY>` | `stopped` |
-| `spec` (Wait `not_started`) | `agentflow skip <KEY>` | `skipped` |
+| any non-terminal Stage | MCP tool `stop_ticket <KEY>` | `confirm_action` Gate |
+| (no Intent Record) | MCP tool `skip_ticket <KEY>` | `confirm_action` Gate |
+| `stopped` | `start-ticket <KEY> --restart` | `confirm_action` Gate |
+| `confirm_action` Gate | `approve` / `reject` | the action (`stopped`, `skipped`, or archive + new Intent Record at `spec`) / previous Stage unchanged |
 
 **Consequences (testable):**
 - The State Tool loads the graph at startup and rejects a graph with an unreachable Stage, an edge to an undefined Stage, or a Gate kind with no outgoing edge for one of its decisions.
 - Every transition the State Tool makes matches exactly one row of the graph; any other transition is refused.
-- `done`, `stopped` and `skipped` have no outgoing edges.
+- `done` and `skipped` have no outgoing edges; `stopped` has only the restart edge, through a `confirm_action` Gate.
 
 #### FR-5: Single next action with server-side chaining
 
-The Conductor obtains the next action with `state_get` and reports completion with `state_advance`. `state_advance` executes every following Tool-owned Stage itself and returns only when the next action needs a Run, a Gate, or nothing (terminal or `ci_running`).
+The Conductor obtains the next action with `state_get` and reports completion with `state_advance`. `state_advance` executes every following Tool-owned Stage itself and returns only when the next action needs a Run, a Gate, or nothing (terminal or `ci_running`). Tool-owned Stages run only in the MCP server.
 
 **Consequences (testable):**
-- `state_get` returns one of: `run_persona` (Persona, model, Input Bundle, Run id), `open_gate` (Gate kind, Gate id), `wait` (Wait Reason `ci_running`, with the message to show), or `end` (terminal Stage).
+- `state_get` returns one of: `run_persona` (Persona, model, Input Bundle, Run id), `run_personas[]` (only for the parallel Reviewers of `validate`, FR-22), `open_gate` (Gate kind, Gate id), `wait` (Wait Reason `ci_running`, with the message to show), or `end` (terminal Stage).
+- State holds the active Runs as a `runs` map keyed by Run id; it has one entry except during `validate`'s parallel Reviewers.
+- `state_get` is idempotent: while a directive is outstanding it returns that directive again instead of creating another Run.
+- Each server start generates a `boot_id` stored in the Server Record; a Run issued under an earlier `boot_id` is treated as discarded (FR-41), and its later tool calls are refused with `E_STALE_RUN`.
+- On startup and on every `state_get`, a non-empty Effect Journal is resumed first (FR-48).
 - `state_get` never returns "call a tool"; Checks, triage, Trace, Wave scheduling, Jira, metrics and push/PR calls never cost a Conductor turn.
-- `state_advance` with a Run id that is not the current Run, or for a Gate without a matching Gate Record, returns an error and changes nothing.
+- `state_advance` repeated with the same input returns its stored result. `state_advance` with a Run id that is not an active Run, or for a Gate without a matching Gate Record, returns an error and changes nothing.
 - `state_advance` stores the Goal Phase cursor (current Wave, Goal, Goal Phase, per-Goal status `pending | in_progress | checked | done`); resume continues at that Goal Phase, not at the start of the Stage.
 - Every transition appends one Memlog entry.
 - The Conductor's prompt contract is: call `state_get`, do exactly what it returns, call `state_advance`, never edit files, never narrate internals, stop when told `end` or `wait`.
@@ -252,11 +257,11 @@ The Conductor obtains the next action with `state_get` and reports completion wi
 When human input or CI is pending, the State records Wait Reasons; any later Copilot session resumes from the recorded State.
 
 **Consequences (testable):**
-- Wait Reason values: `not_started | gate_spec | gate_plan | gate_correct_course | gate_escalation | gate_push | ask_human | ci_running`.
+- Wait Reason values: `gate_spec | gate_plan | gate_correct_course | gate_escalation | gate_push | gate_confirm_action | ask_human | ci_running`.
 - Pending Wait Reasons form a queue; the Conductor opens them one at a time in queue order.
-- `start-ticket <KEY>` on a waiting Ticket re-opens the first pending Gate; on `ci_running` it shows the CI status and ends.
-- `start-ticket <KEY>` while a Run was in progress (session ended mid-Run) discards that Run per FR-41 and relaunches the same Goal Phase in a fresh context.
-- `start-ticket` without a key works only when exactly one Ticket is not terminal; otherwise it lists them and ends.
+- `start-ticket <KEY>` on a waiting Ticket re-opens the first pending Gate; on `ci_running` it checks CI once (FR-27): a terminal result resumes the pipeline, otherwise it restarts the CI timer, shows the status and ends.
+- `start-ticket <KEY>` while a Run was in progress (session ended mid-Run) discards that Run per FR-41 (its `boot_id` no longer matches, FR-5) and relaunches the same Goal Phase in a fresh context.
+- `start-ticket` without a key lists Tickets as in FR-1 and ends.
 
 #### FR-7: Effort counters
 
@@ -266,8 +271,8 @@ The State tracks effort counters; tools echo them in their outputs as evidence.
 
 | Counter | Incremented when | Scope key | Reset |
 |---|---|---|---|
-| `phase.attempts` | a Run of that Goal Phase starts | Goal id + Phase | when the Goal Phase completes |
-| `phase.same_failure_runs` | a Run or Check fails with the same Failure Signature as the previous one | Goal id + Phase | when the signature changes or the Phase completes |
+| `phase.attempts` | a Run of that Goal Phase starts | Goal id + Goal Phase | when the Goal Phase completes |
+| `phase.same_failure_runs` | a Run or Check fails with the same Failure Signature as the previous one | Goal id + Goal Phase | when the signature changes or the Goal Phase completes |
 | `goal.validation_rounds` | `trace` or `validate` sends the Goal back | Goal id | never within a Ticket |
 | `goal.escalations` | an `escalation` Gate opens | Goal id | never |
 | `ticket.patch_loops` | a Patch Plan is drafted | Ticket | never |
@@ -280,11 +285,11 @@ The State tracks effort counters; tools echo them in their outputs as evidence.
 
 #### FR-43: Feature Branch and Ticket lifecycle in git
 
-`start-ticket <KEY>` prepares git before the first Run. *(FR-43 onward were added during finalize; numbering stays stable.)*
+`start-ticket <KEY>` prepares git before the first Run.
 
 **Consequences (testable):**
-- `start-ticket <KEY>` refuses to start while another Ticket in the same repo is between `spec` and a terminal Stage, naming that Ticket. `[ASSUMPTION: one active Ticket per repo in the MVP]`
-- It refuses if the working tree has uncommitted changes outside git-ignored paths, listing them.
+- `start-ticket <KEY>` refuses to start while another Ticket in the same repo is between `spec` and a terminal Stage, naming that Ticket.
+- It refuses if the working tree has uncommitted changes outside git-ignored paths and `.agentflow/`, listing them. `.agentflow/` is excluded from this check, from Snapshots and from attribution (FR-41); its integrity is the config digest (FR-10).
 - It creates `agentflow/<KEY>` from `git.base` (config, default `main`) and checks it out; if the branch exists it checks it out without resetting.
 - It records the baseline Snapshot and HEAD in the Server Record.
 - `.agentflow/tickets/` is git-ignored; it is excluded from Snapshots, run diffs, commits and the PR.
@@ -292,18 +297,23 @@ The State tracks effort counters; tools echo them in their outputs as evidence.
 
 #### FR-48: Server Record integrity
 
-All authoritative records live in the Server Record, outside the workspace, and the server detects any change it did not make.
+All authoritative records live in the Server Record, outside the workspace, written only by the MCP server holding the Repo Lock; approved artifacts are pinned by hash (FR-10).
 
 **Consequences (testable):**
-- The Server Record lives under the per-user state directory (`~/.agentflow/state/<repo-id>/<KEY>/`), never inside the workspace.
-- Every Server Record file is HMAC-signed with a per-machine key at `~/.agentflow/key` (mode 600), created on first run. No tool ever returns the key or its path contents.
-- On every call the State Tool verifies the HMACs it reads; a mismatch refuses the call with an error naming the file, and the Ticket waits on Ask Human (`record_tampered`).
-- A Gate Record written by hand (correct shape, missing or wrong HMAC) is rejected.
+- The Server Record lives at `~/.agentflow/<repo-id>/<KEY>/` (from `os.homedir()`), never inside the workspace, so Copilot's workspace edit tools cannot reach it.
+- `record.yml` holds everything authoritative for the Ticket (State, Gate Records, Approved Version hashes, counters, Run Reports, Snapshot ids, `boot_id`, the Effect Journal) and is replaced atomically (temp file + rename, bounded retry on `EPERM`/`EBUSY`), so it is the single commit point. Approved Version copies are written before the rename that references them.
+- Every record change (State, Gate, Run, CI result) goes through one per-Ticket mutex held for the read-modify-write-rename; the CI timer and parallel Reviewer calls only post events through it. If a commit fails, the in-memory copy is dropped and the record is re-read.
+- The Memlog is append-only; `record.yml` stores its line count, and a Memlog longer than recorded is truncated back to the recorded length on resume.
+- The Tool-Call Log (`tool-calls.yml`) is append-only, never truncated, and its length is not recorded, so no audit entry is ever removed (FR-50).
+- Side effects run through the Effect Journal: the ordered effect list for a transition is committed as `pending` with the new State before the first effect runs; each effect then runs in order and is marked done with its own commit. Every effect is repeatable: pushing an already-pushed SHA is a no-op, the PR call creates or updates, a Jira transition first reads the current status and skips if already there, a Jira comment carries the marker `[agentflow:<KEY>:<effect-key>]` and is skipped if a comment with it exists, and a commit for a Run first looks for an existing commit with that Run's trailer.
+- Only the Repo Lock holder writes the Server Record (FR-1).
+- If `record.yml` is unreadable or inconsistent (fails schema validation, or references a missing Approved Version copy), the call is refused with an error naming the file, and the Ticket waits on Ask Human (`record_invalid`): the user restores the file or stops the Ticket.
+- No cryptographic signing is used; a same-user process writing `~/.agentflow/` is accepted residue (§10).
 - Agents receive Server Record content only as Context Slices in Input Bundles.
 
 ### 4.3 Human Gates
 
-**Description:** Gates stop the pipeline for a human decision. Each is opened through an MCP elicitation prompt. Because hooks are not allowed, the gate tools enforce human presence: only a human response can produce a Gate Record, approvals are versioned, and approved artifacts are frozen by hash. Realizes UJ-1.
+**Description:** Gates stop the pipeline for a human decision, through an MCP elicitation prompt. With no hooks (NFR-2), the gate tools enforce human presence: only a human response produces a Gate Record, approvals are versioned, and approved artifacts are frozen by hash. Realizes UJ-1.
 
 #### FR-8: Elicitation-only approval
 
@@ -321,7 +331,7 @@ A Gate Record can only be created by the server from a human's answer to an MCP 
 Each Gate shows the artifact and the evidence needed to decide.
 
 **Consequences (testable):**
-- `spec` Gate: phase 1 lists each Assumption with accept / remove / edit (text); phase 2 shows the Spec with Assumptions resolved, for the final decision.
+- `spec` Gate: first prompt lists each Assumption with its options (FR-12); second prompt shows the Spec with Assumptions resolved, for the final decision.
 - `plan` Gate: the Plan or Patch Plan, the computed Waves and any scheduler warnings.
 - `correct_course` Gate: the proposal, the affected ACs or Goals, and the CI evidence.
 - `escalation` Gate: the Handoff summary (reason, attempts, ask) and a target model choice (default `high` Tier; alternatives: another `cheap` model, `medium`).
@@ -333,18 +343,11 @@ Each Gate shows the artifact and the evidence needed to decide.
 Each Gate kind has a defined result for every decision, and two terminal Stages end a Ticket without completing it.
 
 **Consequences (testable):**
-
-| Gate | `approve` | `edit` (note) | `reject` |
-|---|---|---|---|
-| `spec` | `plan` | intake Run applies the note → `spec` Gate | `stopped` |
-| `plan` (Plan or Patch Plan) | `implement` | planner Run applies the note → `plan` Gate | `stopped` |
-| `correct_course` | `spec` or `plan` revision Run → its Gate | planner redrafts → `correct_course` Gate | `patch_plan` with the note |
-| `escalation` | escalation Run on the chosen model | same Goal Phase, fresh cheap Run with the note as guidance | `stopped` |
-| `push` | push and PR (FR-26) | `edit:walkthrough` → walkthrough Run → `push` Gate; `edit:rework` → `patch_plan` with the note | `stopped` |
-| `ask_human` | — (options in FR-45) | | |
-
-- `stopped` records `stopped_reason` and the Gate Record or command that caused it. A stopped Ticket can be restarted only with `start-ticket <KEY> --restart`, which archives the Intent Record and starts a new one from `spec` with the same Ticket snapshot. `[ASSUMPTION]`
-- `skipped` is set only from Wait Reason `not_started` by `agentflow skip <KEY>`.
+- The result of each `approve`, `edit` (with note) and `reject` decision is the Gate's row in FR-4; `ask_human` options are in FR-45.
+- `stopped` records `stopped_reason` and the Gate Record or command that caused it. A stopped Ticket can be restarted only with `start-ticket <KEY> --restart` (an option of the `start_ticket` MCP tool), which archives the Intent Record and starts a new one from `spec` with the same Ticket snapshot. `[ASSUMPTION]`
+- `skipped` is set only by the MCP tool `skip_ticket <KEY>` for a Ticket with no Intent Record; it records a minimal Server Record so the Ticket is never listed again. `stopped` is also reachable from any non-terminal Stage with the MCP tool `stop_ticket <KEY>`.
+- `stop_ticket`, `skip_ticket` and a restart are irreversible, so each first opens a `confirm_action` Gate through the same human channel as other Gates (FR-8); the action happens only on `approve`. They are Conductor-only tools: no Persona has them (FR-40).
+- `start_ticket`, `skip_ticket` and `stop_ticket` are MCP tools served by the Repo Lock holder; they are not CLI commands. The CLI is only `agentflow gen agents`, `agentflow config models`, `agentflow context`, `agentflow init` and `agentflow unlock` (FR-1).
 - Neither terminal Stage changes the Jira status.
 - Every Gate decision, including `edit` and `reject`, is stored as a Gate Record.
 
@@ -357,7 +360,8 @@ After approval, the Spec, the Current Plan and the validated code are frozen by 
 - Before every transition, the State Tool compares each such artifact with its Approved Version. On a mismatch it opens Ask Human (`artifact_changed`) with two options: restore the Approved Version (the server keeps a copy) or re-open the matching Gate.
 - During a patch loop the Spec must match its latest Approved Version (the original approval, or the one after an approved Correct-Course).
 - Approving a new Spec version invalidates the Plan approval: the `plan` Gate must approve the Current Plan again, and `trace` and `validate` re-run before the next push.
-- `validate` records the validated HEAD SHA; the push Gate and `push_branch` refuse if HEAD differs (back to `trace`).
+- At `start-ticket` the server records a digest of `.agentflow/` configuration (`config.yml`, `stage-graph.yml`, `personas.yml`, `tools/*.yml`, `prompts/`, `templates/`); before every transition it re-checks it, and a mismatch opens Ask Human (`config_changed`). `commit_prepare` and the `push` Gate refuse any path under `.agentflow/`.
+- `validate` records the validated HEAD SHA; the `push` Gate and `push_branch` refuse if HEAD differs (back to `trace`).
 
 #### FR-51: Approved Versions and the Current Plan
 
@@ -366,7 +370,7 @@ Approvals are versioned, and every tool reads the same Current Plan.
 **Consequences (testable):**
 - At the `spec` Gate, accepted Assumptions are rewritten to `[assumption: accepted]` by `doc_scaffold` before the final decision; the stored hash is taken after the rewrite.
 - Each `approve` stores a new Approved Version (copy + hash) in the Server Record.
-- A Patch Plan is a delta: it may add Goals, Checklist Items or Scenarios, or change ones not yet `done`; it never deletes or renumbers. The Current Plan is `plan.md` plus approved Patch Plans in order. `[ASSUMPTION: delta, not full replacement]`
+- A Patch Plan is a delta: it may add Goals, Checklist Items or Scenarios, or change ones not yet `done`; it never deletes or renumbers. The Current Plan is `plan.md` plus approved Patch Plans in order.
 - `plan_schedule`, `trace_matrix`, `review_bundle` and every Input Bundle read the Current Plan through `doc_section`.
 
 #### FR-40: Per-Persona tool sets
@@ -376,10 +380,12 @@ Each Persona runs with a Copilot agent whose tool set contains only the tools it
 **Consequences (testable):**
 - `personas.yml` declares each Persona's tool allowlist; the generator (FR-38) writes it into the agent file.
 - `intake` and `planner` have no file-edit or terminal tools; they write only through `doc_scaffold`.
-- `implementer`, `refactorer` and `escalation` have file-edit tools and `run_tests`, `run_checks`, `commit_prepare`, `handoff_create`, `run_report`, `ask_human`, `claim_post`; they have no general terminal tool. Commands run only through MCP tools, each in its own process. `[ASSUMPTION: no terminal tool, so raw git push, curl or gh cannot be run]`
+- Every Persona has `bundle_get(run_id)` (its Input Bundle, or its inlined Review Bundle) and `run_report`.
+- `implementer`, `refactorer` and `escalation` have file-edit tools and `run_tests`, `run_checks`, `commit_prepare`, `handoff_create`, `run_report`, `ask_human` (plus `claim_post`, post-MVP); they have no general terminal tool. Commands run only through MCP tools, each in its own process. Without a terminal tool, raw `git push`, `curl` or `gh` cannot be run.
 - `reviewer` and `synthesizer` have no workspace read or search tools; their Review Bundle is inlined.
 - No agent has git-push, GitHub or Jira-write tools; commits, pushes and transitions go only through server tools.
-- The Conductor's tool set is `state_get`, `state_advance`, `gate_request`, `gate_confirm` and subagent launch.
+- The Conductor's tool set is `state_get`, `state_advance`, `gate_request`, `gate_confirm`, `start_ticket`, `stop_ticket`, `skip_ticket` and subagent launch. Conductor-only tools are refused when called with a Run id; no Persona has `stop_ticket`, `skip_ticket` or a restart.
+- `job_get` (polling a long-running tool call) is added only if the OQ-13 proof shows tool calls time out.
 - `[verify: OQ-8]` Copilot enforces per-agent tool allowlists for subagents.
 
 #### FR-41: Detect unattributed changes
@@ -389,32 +395,34 @@ The server attributes every working-tree change to a Run, and refuses changes it
 **Consequences (testable):**
 - Snapshots are recorded at `start-ticket` (baseline), at each Run start and at each Run Report.
 - When opening the `spec` and `plan` Gates, the server compares the tree with the baseline; any difference opens Ask Human (`unattributed_change`) listing the files, before the Gate.
+- Snapshots, Run diffs and attribution exclude `.agentflow/` (FR-43).
 - A Run's diff is the difference between its start Snapshot and the tree at its Run Report. `commit_prepare` commits only files in that diff.
 - At each Run start, any difference from the previous Run's end Snapshot (or baseline) opens Ask Human (`unattributed_change`).
-- On Status Code `1`, `2`, or a missing Run Report, the server stashes the Run's diff (named `agentflow/<KEY>/<run-id>`), restores the start Snapshot, and logs the stash name in the Memlog and the Handoff. `[ASSUMPTION: reset-and-stash on failed Runs]`
+- On Status Code `1`, `2`, a missing Run Report, or a Run discarded by a new `boot_id`, the server saves the Run's work under its Discard Ref (`refs/agentflow/<KEY>/<run-id>`, never `git stash`), restores the start Snapshot, and logs the Discard Ref in the Memlog and the Handoff. Saving the Discard Ref and restoring the Snapshot are Effect Journal entries (FR-48), so a crash mid-restore resumes without losing the Run's work.
 
 #### FR-42: Fallback approval channels
 
-If MCP elicitation is unavailable, `gate_request` falls back to an always-confirm tool, and then to a CLI the human runs outside Copilot.
+If MCP elicitation is unavailable, `gate_request` falls back to an always-confirm tool. A CLI channel exists only if the week-1 proof needs it.
 
 **Consequences (testable):**
 - Fallback 1: the tool `gate_confirm` is declared so that Copilot always shows its confirmation dialog and never auto-approves it. `[verify: OQ-1, OQ-10]`
-- Fallback 2: `agentflow approve <KEY> <GR-n> <decision> --code <code>` run in a terminal outside Copilot; the one-time code is shown only in the desktop notification. `[ASSUMPTION]`
+- Fallback 2 (conditional): built only if the week-1 proof (OQ-1, OQ-10) shows both elicitation and the always-confirm dialog fail. It is then `agentflow approve <KEY> <GR-n> <decision> --code <code>` run in a terminal outside Copilot, with a single-use code bound to that Gate Record and shown only in the desktop notification.
 - The Gate Record stores which channel was used; the Memlog records it.
 - If no channel is available, `gate_request` fails with an explicit error and the Ticket stays waiting.
 
 #### FR-49: Notifications on every wait
 
-The Daemon notifies the user whenever a Ticket starts waiting on them or CI finishes.
+The MCP server notifies the user whenever a Ticket starts waiting on them or CI finishes.
 
 **Consequences (testable):**
-- A desktop notification is sent when a Wait Reason other than `not_started` is added, and when CI reaches a terminal state; text: "<KEY>: <reason>, run start-ticket <KEY>".
-- Notifications use an OS notification library from the Daemon, not MCP. `[ASSUMPTION]`
+- A desktop notification is sent by the MCP server when it adds a Wait Reason, and when its CI timer sees a terminal state; text: "<KEY>: <reason>, run start-ticket <KEY>".
+- Notifications use an OS notification library inside the MCP server process, not an MCP message. `[ASSUMPTION]`
+- Notifications are best-effort (they are sent only while the MCP server runs, and the OS may drop them); every wait is also reported by `start-ticket`.
 - A failed notification is logged and never blocks the pipeline.
 
 ### 4.4 Spec
 
-**Description:** The intake Persona (cheap) condenses the Ticket, its comments and depth-1 linked issues into one Spec. The method is distilled from BMAD's `bmad-spec`; the skill itself is not invoked. ACs are Given/When/Then. Anything inferred is tagged so the human resolves it at the `spec` Gate. Realizes UJ-1.
+**Description:** The intake Persona (cheap) condenses the Ticket, its comments and depth-1 linked issues into one Spec with Given/When/Then ACs. Anything inferred is tagged so the human resolves it at the `spec` Gate. Realizes UJ-1.
 
 #### FR-11: Generate the Spec
 
@@ -436,7 +444,7 @@ The `spec` Gate cannot be approved while any `[assumption]` remains unresolved.
 
 ### 4.5 Plan
 
-**Description:** The planner Persona (medium) breaks the approved Spec into Goals, Checklist Items and Scenarios. Scenario design is where vacuous tests and scope creep are prevented. A deterministic scheduler computes Waves. Realizes UJ-1.
+**Description:** The planner Persona (medium) breaks the approved Spec into Goals, Checklist Items and Scenarios; Scenario design is where vacuous tests and scope creep are prevented. A deterministic scheduler computes Waves. Realizes UJ-1.
 
 #### FR-13: Generate the Plan
 
@@ -460,7 +468,7 @@ The planner produces `plan.md`: Markdown with one fenced `yaml` block validated 
 
 ### 4.6 TDD Implementation
 
-**Description:** For each Goal, the implementer (cheap) runs a `red` Run, the server triages the new tests, the implementer runs a `green` Run, Checks run, then the refactorer (cheap, fresh context) runs a `refactor` Run and Checks run again. Every Run ends with a Run Report and, when done, a commit. Realizes UJ-1.
+**Description:** Per Wave, the implementer (cheap) runs every Goal's `red` Run and the server triages them in one batch; then, per Goal, a `green` Run, Checks, a `refactor` Run by the refactorer (cheap, fresh context), and Checks again. Every Run ends with a Run Report and, when done, a commit. Realizes UJ-1.
 
 #### FR-15: Red, Green, Refactor per Goal
 
@@ -471,14 +479,14 @@ Each Goal is implemented test-first in separate fresh-context Runs.
 - `green` Run: changes production code until the Goal's tests pass; it does not edit the Goal's Scenario tests except to fix a wrong-reason failure reported by triage.
 - `refactor` Run: receives only the Current Plan section, the changed files and the green results; it must keep all tests passing.
 - Every Run's Input Bundle ends with the mandated last tasks: `commit_prepare` (on success), then `run_report`.
-- Goals run in Wave order; within a Wave they run one at a time unless parallel mode is on (§4.11).
+- Goals run in Wave order. Within a Wave, all `red` Runs finish before batched triage, and no `green` Run starts before triage clears that Goal. `green` and `refactor` Runs run one Goal at a time (parallel mode, §4.11, is post-MVP).
 
 #### FR-16: Status Code and when to escalate
 
 Every implementer, refactorer and escalation Run reports a Status Code through `run_report` (FR-44). The Persona prompt fixes when each code is allowed.
 
 **Consequences (testable):**
-- `0`: the Run's task is complete and its own checks pass.
+- `0`: the Run's task is complete and the tests it ran pass.
 - `1`: not done but the Run believes a fresh attempt can succeed. The server relaunches the same Goal Phase in a fresh context on the next model in the `cheap` Tier's rotation list and increments `phase.attempts`.
 - `2`: allowed only when (a) the same failure persisted after two *different* approaches, (b) the fix needs cross-module reasoning outside the Input Bundle, or (c) a requirement and a test conflict. Never on a first failure. Before reporting `2`, the Run calls `handoff_create` (FR-24).
 - A Run that ends without a Run Report is treated as `1` with Failure Signature `missing_report`, so repeated misses reach the Loop Checkpoint.
@@ -488,7 +496,8 @@ Every implementer, refactorer and escalation Run reports a Status Code through `
 Runs report their outcome to the server directly, not through the Conductor.
 
 **Consequences (testable):**
-- `run_report(run_id, status, summary, reason?)` is callable only with the current Run id; a second call for the same Run is rejected.
+- `run_report(run_id, status, summary, reason?, result?)` is callable only with an active Run id; `result` is validated by a per-Persona schema and the server writes the corresponding document.
+- A repeat `run_report` with the same content for the same Run returns the stored result (replay), so a lost reply can be retried; a second report with different content for the same Run is rejected.
 - `state_advance` for a Run reads the stored Run Report, never chat text.
 - The Run Report, its Snapshot and the model used are stored in the Server Record.
 
@@ -499,21 +508,22 @@ Each Run that ends with Status Code `0` commits its own changes through `commit_
 **Consequences (testable):**
 - `commit_prepare` commits only files in the Run's diff (FR-41) to the Feature Branch; it refuses protected branches.
 - Commit messages are `<KEY> <Goal id> <phase>: <summary>`.
-- `red` Runs commit their failing tests. `[ASSUMPTION: failing tests are committed on the Feature Branch]`
+- `red` Runs commit their failing tests on the Feature Branch; nothing is pushed outside the `push` Gate.
 - Files changed outside the Goal's `files` globs are committed but listed as warnings at the `push` Gate. `[ASSUMPTION: warn, not refuse, in sequential mode]`
-- In parallel mode, commits are serialized by a server-side lock.
-- No push happens outside the `push` Gate.
+- *(Post-MVP parallel mode)* commits are serialized by a server-side lock.
 
 #### FR-18: Test triage
 
-After each `red` Run, the server runs the Goal's tests and classifies results by Scenario tag, reporting only anomalies.
+After every `red` Run of a Wave has finished, the server runs all of that Wave's new and changed tests in one batch and classifies results per Goal by Scenario tag, reporting only anomalies.
 
 **Consequences (testable):**
 - Classification uses the test runner's JSON output and the Scenario id in each test title, with no model.
 - A failure caused by import, compile, setup or timeout rather than an assertion → back to `red` with the Failure Payload (fix the test, not the code).
 - A `new` or `change` test that passes at Red, or an `existing` test that fails → Ask Human (`triage_anomaly`) with options: continue (record a Scenario override in the Server Record; `plan.md` is not edited), back to `red` to strengthen the test, or edit plan (Patch Plan).
 - A Scenario with no test carrying its id → back to `red`.
-- No anomalies → `green` starts; no output.
+- One test-runner invocation covers the whole Wave; results are split per Goal by Scenario id.
+- A Goal sent back to `red` is re-triaged alone after its new `red` Run; other Goals of the Wave proceed to `green` once they are clear.
+- No anomalies for a Goal → its `green` Run may start; no output.
 
 #### FR-47: Step rules
 
@@ -521,21 +531,21 @@ Each Persona's Input Bundle carries only the distilled rules for its step, withi
 
 **Consequences (testable):**
 - `implementer` and `refactorer` rules: write complete files with no placeholder stubs; handle errors at integration boundaries; never hardcode secrets; never write a test that cannot fail; defer code style to the repo's linter config.
-- Test volume is one test per Scenario, plus edge-case tests only where a Scenario names them. `[ASSUMPTION: replaces the generic "happy path + 2 edge cases" rule, consistent with SM-C3]`
+- Test volume is one test per Scenario, plus edge-case tests only where a Scenario names them. This replaces the generic "happy path + 2 edge cases" rule (consistent with SM-C3).
 - The senior-engineer base prompt is part of every Persona: own the outcome, make the smallest correct change, state assumptions, don't gold-plate, and stop with evidence when stuck (FR-16).
 
 ### 4.7 Checks
 
-**Description:** After each `green` and `refactor` Run reaches Status Code `0`, the server runs lint, type checks and the full test suite. Clean results cost nothing; failures return a trimmed payload. Realizes UJ-1.
+**Description:** The server runs lint, type checks and the full test suite after each `green` and `refactor` Run that reports Status Code `0`. Clean results cost nothing; failures return a trimmed payload. Realizes UJ-1.
 
 #### FR-19: Per-Goal Checks
 
-`run_checks` runs inside the server after each `green` and `refactor` Run's Status Code `0` (after Wave synthesis in parallel mode).
+`run_checks` runs inside the server after each `green` and `refactor` Run's Status Code `0` (post-MVP parallel mode: after Wave synthesis).
 
 **Consequences (testable):**
 - Checks run lint, types and the full repository test suite; they never run per file write.
 - A clean run records a one-line status and triggers no model call.
-- A failed run sends the Goal back to the same Phase (`green` or `refactor`) with the Failure Payloads.
+- A failed run sends the Goal back to the same Goal Phase (`green` or `refactor`) with the Failure Payloads.
 
 #### FR-20: Shared Failure Payload schema
 
@@ -543,12 +553,13 @@ Checks, test runs and CI failures share one Failure Payload schema.
 
 **Consequences (testable):**
 - Each failure has: `source` (`lint | types | test | ci`), `name`, `location` (`path:line`), `message` (≤ 15 lines), `signature`.
+- `signature` is the Failure Signature: SHA-256 of `name`, the file path (from `location`, without line or column) and the normalized first message line. A failure that moves to another line of the same file keeps its signature, so it still counts as a repeat for `phase.same_failure_runs` (FR-7) and the Loop Checkpoint (FR-45).
 - CI failures may add `job` and `step`; all other fields keep the same names.
 - A payload holds at most `failures.max` entries (config, default 20); the rest are summarized as "+N more" counts per file. `[ASSUMPTION: default 20]`
 
 ### 4.8 Validation
 
-**Description:** After all Goals are done, a deterministic Trace Matrix proves coverage, then several cheap Reviewers check behaviour against the Spec in parallel and a medium Synthesizer merges their findings. The validated code is frozen by HEAD SHA. Realizes UJ-1.
+**Description:** After all Goals are done, a deterministic Trace Matrix proves coverage, then cheap Reviewers check behaviour against the Spec in parallel and a medium-Tier Synthesizer merges their findings. The validated code is frozen by HEAD SHA. Realizes UJ-1.
 
 #### FR-21: Blocking Trace Matrix
 
@@ -569,6 +580,7 @@ The server splits the change into Review Bundles sized to the Reviewer model's b
 - Each bundle inlines: the relevant ACs, the Current Plan section, the diff slice, the Trace Matrix rows, a one-line Checks status, and a Memlog Context Slice for that Goal.
 - A single diff hunk larger than the limit is truncated with a marker naming the omitted lines; the Memlog slice keeps the most recent entries that fit.
 - Every AC handled by a bundle is listed in that bundle; an AC split across bundles is reviewed in each.
+- The Reviewer Runs are launched together: `state_get` returns `run_personas[]` with one Run per bundle (FR-5); each Reviewer reads its bundle with `bundle_get`.
 - Each Reviewer returns `{ac_id: met | partial | missing, evidence, gaps}` for its ACs.
 - A Reviewer that finds an AC ambiguous marks it `partial` with `gaps: ["ambiguous AC"]`; the Synthesizer decides whether to raise Ask Human (`ac_ambiguous`).
 
@@ -585,7 +597,7 @@ A medium-Tier Synthesizer merges Reviewer outputs into one verdict per AC and pe
 
 ### 4.9 Escalation and Ask Human
 
-**Description:** When a cheap Run reports it is stuck (Status Code `2`), it writes a structured Handoff and the human decides whether to escalate. When any loop repeats the same failure, or an agent needs a decision only a human can make, the server raises Ask Human. Realizes UJ-1.
+**Description:** A stuck Run (Status Code `2`) writes a Handoff and the human decides whether to escalate. When a loop repeats the same failure, or an agent needs a decision only a human can make, the server raises Ask Human. Realizes UJ-1.
 
 #### FR-24: Structured Handoff
 
@@ -593,7 +605,7 @@ The stuck Run calls `handoff_create`, which writes a schema-validated Handoff to
 
 **Consequences (testable):**
 - The Run fills: reason (`stuck | cross_module | spec_conflict`), attempts (one line each), ask (one sentence), constraints.
-- The server fills: from Persona and model, Goal, Goal Phase, Scenarios, files, counters, stash names (FR-41), and the role prompt path.
+- The server fills: from Persona and model, Goal, Goal Phase, Scenarios, files, counters, Discard Refs (FR-41), and the role prompt path.
 - An invalid Handoff is rejected with the failing field named, and the Run must fix it before `run_report(2)`.
 
 #### FR-25: Human-approved Escalation
@@ -601,7 +613,7 @@ The stuck Run calls `handoff_create`, which writes a schema-validated Handoff to
 A Status Code `2` opens the `escalation` Gate; only on approval does an escalation Run start.
 
 **Consequences (testable):**
-- The escalation Run's prompt is the senior base prompt + the stuck Persona's role prompt + `prompts/escalation.md`; its Input Bundle is the Handoff plus the paths it lists.
+- The escalation Run's prompt is the senior-engineer base prompt + the stuck Persona's role prompt + `prompts/escalation.md`; its Input Bundle is the Handoff plus the paths it lists.
 - It runs on the model chosen at the Gate (default: first model of the `high` Tier).
 - It ends like any Goal Phase Run: `commit_prepare` and `run_report`. Its Handoff result is `{status: resolved | partial | cannot, summary, files_changed, follow_ups}`.
 - `resolved` → Checks for that Goal Phase; `partial` or `cannot` → Ask Human with the summary.
@@ -615,35 +627,38 @@ The server pauses for a human decision when a loop repeats or an agent asks, ins
 **Consequences (testable):**
 - Loop Checkpoint: when `phase.same_failure_runs` reaches `checkpoint.n` (config, default 3) on any Goal Phase, Check, Trace or Validate loop, or `ticket.patch_loops` reaches `checkpoint.n`, the server raises Ask Human (`loop_checkpoint`) before launching the next Run.
 - Personas may call `ask_human(reason, evidence)` for `ticket_ambiguous`, `spec_conflict`, `plan_wrong`, `ac_ambiguous` or `escalation_cannot`; the Run then ends with Status Code `1` and the Goal Phase waits.
-- Server-raised reasons: `loop_checkpoint`, `triage_anomaly`, `unattributed_change`, `artifact_changed`, `record_tampered`, `ci_no_result`, `remote_diverged`.
+- Server-raised reasons: `loop_checkpoint`, `triage_anomaly`, `unattributed_change`, `artifact_changed`, `record_invalid`, `config_changed`, `ci_no_result`, `remote_diverged`.
 - Options: `continue` (resume where raised; for a Loop Checkpoint, resets `phase.same_failure_runs`), `escalate` (opens the `escalation` Gate), `edit plan` (planner drafts a Patch Plan with the note → `plan` Gate), `stop` (→ `stopped`). Reason-specific options from FR-10, FR-18 and FR-27 are added.
 - No hard cap exists: after `continue`, the loop runs again until the next checkpoint.
 
 ### 4.10 Push, CI and Patch Loop
 
-**Description:** The `push` Gate shows a Walkthrough; on approval the Feature Branch is pushed and a PR opened. The Daemon watches CI in the background. On failure, a Patch Plan is drafted against the unchanged Spec and must be approved before any code is generated. On success, the Ticket moves to In Tests. Realizes UJ-1.
+**Description:** The `push` Gate shows a Walkthrough; on approval the Feature Branch is pushed and a PR opened. The MCP server watches CI on a timer. On failure, a Patch Plan against the unchanged Spec must be approved before any code is generated; on success, the Ticket moves to In Tests. Realizes UJ-1.
 
 #### FR-26: Walkthrough and push
 
-The server builds the Walkthrough from a template, a cheap `walkthrough` Run writes only the judgment parts, and on `push` Gate approval the server pushes and opens the PR. The method is distilled from BMAD's `bmad-walkthrough`; the skill itself is not invoked.
+The server builds the Walkthrough from a template, a cheap `walkthrough` Run writes only the judgment parts, and on `push` Gate approval the server pushes and opens the PR.
 
 **Consequences (testable):**
 - The template fills commit list, files changed, Trace Matrix summary and "how to test" (from the Scenarios) without a model; the `walkthrough` Run writes "purpose" and "what to look at closely".
-- The push Gate's hash covers `walkthrough.md` plus the HEAD SHA; `push_branch` refuses if HEAD differs from the approved SHA.
+- The `push` Gate's hash covers `walkthrough.md` plus the HEAD SHA; `push_branch` refuses if HEAD differs from the approved SHA.
 - Push is fast-forward only to `origin/agentflow/<KEY>`; force-push is never used. GitHub credentials come from `GITHUB_TOKEN`.
 - A PR is created against `git.base` (or updated if one exists) with the Walkthrough as its body; `pr.draft` (config, default `false`) sets draft mode. `[ASSUMPTION: the pipeline opens the PR; v5 only said "Jira comment with PR link"]`
 - If `git.base` has advanced, the PR is opened anyway and conflicts surface on the PR; the MVP does not rebase. `[ASSUMPTION]`
 
 #### FR-27: CI watch
 
-After a push, the Daemon watches GitHub Actions for the pushed SHA in the background and records the result; the Conductor ends its turn with Wait Reason `ci_running`.
+After a push, the MCP server polls GitHub Actions for the pushed SHA on an in-process timer and records the result; the Conductor ends its turn with Wait Reason `ci_running`.
 
 **Consequences (testable):**
 - Config: `ci.poll_interval` (default 30 s), `ci.max_wait` (default 60 min), `ci.no_run_grace` (default 5 min). `[ASSUMPTION: defaults]`
 - Success → `done`; failure → `ci_failure` writes Failure Payloads to `ci_failure.yml` and the Ticket moves to `patch_plan`.
 - Cancelled, timed out, no run within `ci.no_run_grace`, or `ci.max_wait` exceeded → Ask Human (`ci_no_result`) with extra options: re-watch, treat as failure.
-- Before watching, the Daemon checks that the remote branch head equals the approved push SHA; otherwise Ask Human (`remote_diverged`).
-- No model is called while waiting; a desktop notification is sent on every terminal state (FR-49).
+- Before watching, the server checks that the remote branch head equals the approved push SHA; otherwise Ask Human (`remote_diverged`).
+- The timer lives only while the MCP server runs (VS Code open). When `start-ticket <KEY>` resumes a Ticket on `ci_running`, the server checks CI once: a terminal result is applied, otherwise the timer restarts.
+- A GitHub API failure (for example a VPN drop) is logged and retried on the next tick; State is unchanged until a result is read. `ci.max_wait` counts from the push, across restarts.
+- The timer is not an MCP tool call, so no tool call waits on CI.
+- No model is called while waiting; notifications follow FR-49.
 
 #### FR-28: Patch Plan with approval
 
@@ -651,17 +666,17 @@ On CI failure, or on `edit:rework` at the `push` Gate, the planner drafts a Patc
 
 **Consequences (testable):**
 - The Patch Plan is written to `patch-<n>.md` as a delta (FR-51); `ticket.patch_loops` increments.
-- The Spec must match its latest Approved Version (FR-10).
+- The reused Spec must match its latest Approved Version (FR-10).
 - After approval the loop runs `implement` for new or changed Goals → `checks` → `trace` → `validate` → `push` Gate.
 - Nothing is generated between CI failure and Patch Plan approval except the Patch Plan itself.
 
 #### FR-29: Correct-Course Proposal
 
-If the planner judges that the Spec or Plan itself is wrong, it writes a Correct-Course Proposal instead of a Patch Plan, decided at its own Gate. The method is distilled from BMAD's `bmad-correct-course`.
+If the planner judges that the Spec or Plan itself is wrong, it writes a Correct-Course Proposal instead of a Patch Plan, decided at its own Gate.
 
 **Consequences (testable):**
 - The proposal (`correct-course-<n>.md`) names the affected ACs or Goals, the CI evidence, and the proposed change.
-- On `approve`, the intake Persona (for Spec changes) or the planner (for Plan changes) produces the revised artifact through `doc_scaffold`, and the matching `spec` or `plan` Gate opens. A Spec change also requires re-approval of the Current Plan (FR-10).
+- On `approve`, the intake Persona (for Spec changes) or the planner (for Plan changes) produces the revised artifact through `doc_scaffold`, and the matching `spec` or `plan` Gate opens; a Spec change also invalidates the Plan approval (FR-10).
 - Code already committed is kept; Goals affected by the change go back to `green`.
 - `intake` and `planner` keep their tool sets during revision (no file-edit or terminal tools).
 
@@ -671,12 +686,15 @@ On CI success, the server transitions the Ticket to the configured done status a
 
 **Consequences (testable):**
 - The transition name comes from config (default "In Tests"); an unknown transition raises Ask Human with the Jira error.
+- The transition and the comment are Effect Journal entries (FR-48): the transition first reads the current status and skips if already there; the comment carries the marker `[agentflow:<KEY>:<effect-key>]` and is skipped if a comment with it exists, so a resume never duplicates either.
 - The Jira comment contains the PR URL only. `[ASSUMPTION: no summary in the Jira comment; retrospective stays local per Q30]`
 - State moves to `done`; Run Metrics are finalized (FR-35).
 
-### 4.11 Parallel Goal Execution (behind a flag)
+### 4.11 Parallel Goal Execution — Post-MVP (not in the first build)
 
-**Description:** When enabled, Goals in the same Wave run as parallel Runs. They share the Memlog. Launches are gated by the log, not by a timer: each Run's first act is to post a Claim (the files it will work on and its intent), and the Launcher starts the next Run only once that Claim appears. Every later Run reads the open Claims first and stays out of the claimed files. A Synthesizer reconciles the Wave before Checks. Off by default until the sequential loop is stable.
+**Status:** Post-MVP since revision 2026-11-13. FR-31–33 are kept with their IDs as the agreed design for a later build; the first build implements only the sequential path, and no MVP story depends on them. When this is built, State holds a map of active Runs, and Claims and a git write lock are added.
+
+**Description:** When enabled, Goals in the same Wave run as parallel Runs that share the Memlog. Launches are gated by Claims, not by a timer (FR-32), and a Synthesizer reconciles the Wave before Checks. Off by default until the sequential loop is stable.
 
 #### FR-31: Parallel mode switch
 
@@ -684,11 +702,11 @@ A config flag `parallel: true | false` (default `false`) controls whether Waves 
 
 **Consequences (testable):**
 - With `false`, all Goals run one at a time in Wave order.
-- `agentflow config set parallel <true|false> --ticket <KEY>` overrides it for one Ticket through the server; the State is never hand-edited.
+- A per-Ticket override is set through an MCP tool served by the Repo Lock holder (FR-48); the State is never hand-edited.
 
 #### FR-32: Claim-gated launches on a shared log
 
-In parallel mode, the Launcher starts the Wave's `green` Runs one at a time and waits for each one's Claim before starting the next. `red` and `refactor` Runs stay sequential. `[ASSUMPTION: only green Runs are parallel]`
+In parallel mode, the Launcher starts the Wave's `green` Runs one at a time and waits for each one's Claim before starting the next. `red` and `refactor` Runs stay sequential.
 
 **Consequences (testable):**
 - A Run's first action, before any file edit, is `claim_post`: Goal id, the files it will create or modify, and a one-sentence intent. The server stores it and mirrors it to the Memlog.
@@ -711,21 +729,21 @@ After all `green` Runs of a parallel Wave report, a Synthesizer checks the combi
 
 ### 4.12 Memory and Learning
 
-**Description:** Each Ticket keeps a Memlog and a Tool-Call Log. Gate edits and Escalation outcomes feed two repo-level documents (Preferences, Pitfalls) that Runs read as bounded Context Slices, alongside the Project Context. Run Metrics stay local for later evaluation.
+**Description:** Each Ticket keeps a Memlog and a Tool-Call Log. Gate edits and Escalation outcomes feed the Preferences Doc and Pitfalls Doc, which Runs read as Context Slices alongside the Project Context. Run Metrics stay local for later evaluation.
 
 #### FR-34: Ticket Memlog
 
-The server appends one entry to the Ticket's Memlog for every transition, Gate decision, Escalation, Claim and loop.
+The server appends one entry to the Ticket's Memlog for every transition, Gate decision, Escalation, loop and (post-MVP) Claim.
 
 **Consequences (testable):**
 - Entry format: `- <ISO timestamp> [<type>] <text> {<key>=<value> …}`.
-- Types: `decision | change | event | assumption | gate | escalation | ask_human | claim | claim_update | claim_close`.
-- Only the server writes the Memlog (append-only, HMAC per FR-48); concurrent appends never interleave.
+- Types: `decision | change | event | assumption | gate | escalation | ask_human` (post-MVP adds `claim | claim_update | claim_close`).
+- Only the server writes the Memlog (append-only, line count recorded in `record.yml` per FR-48); concurrent appends never interleave.
 - Runs receive Memlog Context Slices, never chat transcripts.
 
 #### FR-35: Run Metrics
 
-On a terminal Stage, the server writes Run Metrics locally.
+On a terminal Stage, the server writes Run Metrics to `metrics.yml` in the Ticket's Server Record directory (`~/.agentflow/<repo-id>/<KEY>/`).
 
 **Consequences (testable):**
 - Fields: Runs by Persona, Tier and model id; estimated tokens per Run (Input Bundle bytes / 4); prompt version hash per Persona; Status Code sequence per Goal Phase; counters from FR-7; Gate decisions by kind (approve / edit / reject, including reject rate); escalations by Persona, reason and model; iterations per Goal by Tier; triage anomaly types; Ask Human count by reason; ticket-to-PR time; selection-to-terminal time.
@@ -752,7 +770,7 @@ After a Gate `edit` is resolved, and after each Escalation, a cheap `curator` Ru
 
 #### FR-37: Project Context
 
-Runs read the repo's Project Context (an AGENTS.md block distilled from BMAD's `bmad-project-context` method; the skill itself is not invoked) as a Context Slice, plus one shared knowledge bundle.
+Runs read the repo's Project Context as a Context Slice, plus one shared knowledge bundle.
 
 **Consequences (testable):**
 - `agentflow context init` creates the block once per repo; `agentflow context refresh` updates it on request, not per Ticket.
@@ -761,7 +779,7 @@ Runs read the repo's Project Context (an AGENTS.md block distilled from BMAD's `
 
 ### 4.13 Personas and Model Tiers
 
-**Description:** All Personas share a senior-engineer base prompt and differ only in their role prompt. A generator composes them into Copilot agent files with their tool allowlists. Tiers map to concrete Copilot models through a config command with project and local layers.
+**Description:** All Personas share the senior-engineer base prompt and differ only in their role prompt; a generator composes them into Copilot agent files with their tool allowlists. Tiers map to concrete Copilot models through a config command with project and local layers.
 
 #### FR-38: Composed Personas
 
@@ -783,12 +801,12 @@ A CLI command sets a Persona's Tier, or a Tier's models, at project or local lev
 
 ## 5. Cross-Cutting NFRs
 
-- **NFR-1 Token economy:** Tool-owned Stages (poll, transitions, scheduling, Checks, triage, Trace Matrix, CI watch, Walkthrough template, metrics) make zero model calls and cost zero Conductor turns (FR-5). A Stage gets a model only if it is one of: Spec, Plan, Patch Plan, Correct-Course, `red`/`green`/`refactor` Runs, escalation, Reviewers, Synthesizer, Walkthrough judgment parts, curator proposals. Model-facing tool outputs are trimmed (FR-20).
+- **NFR-1 Token economy:** Tool-owned Stages (Jira queries, transitions, scheduling, Checks, triage, Trace Matrix, CI watch, Walkthrough template, metrics) make zero model calls and cost zero Conductor turns (FR-5). A Stage gets a model only if it is one of: Spec, Plan, Patch Plan, Correct-Course, `red`/`green`/`refactor` Runs, escalation, Reviewers, Synthesizer, Walkthrough judgment parts, curator proposals. Model-facing tool outputs are trimmed (FR-20).
 - **NFR-2 No hooks:** no feature depends on harness hooks. Ordering, Gates, freezes and human presence are enforced inside the server.
 - **NFR-3 Host:** VS Code Copilot agent mode only, with Copilot-provided models only.
 - **NFR-4 Determinism:** the same State and inputs give the same `state_get` action. Tool outputs are machine-parseable.
 - **NFR-5 Resumability:** a Copilot session can end at any point; `start-ticket <KEY>` resumes from State (FR-6).
-- **NFR-6 Security:** secrets only from environment variables or the per-machine key file; push only to the Feature Branch, fast-forward only; Jira token scoped to read, transition and comment.
+- **NFR-6 Security:** secrets only from environment variables, passed to the MCP server through the `env` block of `.vscode/mcp.json` (never committed); push only to the Feature Branch, fast-forward only; Jira token scoped to read, transition and comment. Commands run with one of two environments: repo code (tests, lint, type-check) runs with a scrubbed allowlist that excludes secrets and the user's git identity; git runs with the user's real environment minus `JIRA_*`, `GITHUB_TOKEN` and config-listed secret names, so the user's global git config and Git Credential Manager work for commits and pushes. `GITHUB_TOKEN` is used only for GitHub API calls (PR, Actions).
 - **NFR-7 Formats:** YAML for config, schemas, Server Record files and frontmatter; Markdown for prompts and documents; TypeScript for logic. JSON is allowed only for raw external payloads stored as received (`ticket.json`) and test-runner output.
 - **NFR-8 Fresh context:** every Run gets an explicit Input Bundle and no prior chat history.
 - **NFR-9 Error surfacing:** every external call (Jira, git, GitHub, test runners, notifications) returns a typed error to the caller; nothing fails silently.
@@ -802,7 +820,7 @@ A CLI command sets a Persona's Tier, or a Tier's models, at project or local lev
 
 ## 6. Method Lineage (informative, not normative)
 
-What the MVP takes from each method. Every row is distilled into Agentflow tools or short Persona prompts; no AI-DLC or BMAD skill, hook or engine runs at runtime, to stay within NFR-10.
+What the MVP takes from each method. Every row is distilled into Agentflow tools or short Persona prompts; no AI-DLC or BMAD skill, hook or engine runs at runtime (NFR-10).
 
 | Concept | From | How it appears here |
 |---|---|---|
@@ -835,21 +853,13 @@ What the MVP takes from each method. Every row is distilled into Agentflow tools
 
 ### 8.1 In Scope
 
-- Daemon: Jira poller, notifications, CI watch.
-- Intent Record (Ticket Workspace + Server Record), Feature Branch lifecycle.
-- Stage Graph, State Tool with server-side chaining, Conductor, resume.
-- Gates (`spec`, `plan`, `correct_course`, `escalation`, `push`, `ask_human`) with elicitation and fallbacks; Approved Versions.
-- Per-Persona tool sets, change attribution, Server Record integrity, context budgets.
-- Spec, Plan, Waves, sequential TDD Runs, triage, per-Goal Checks, granular commits, Run Reports.
-- Trace Matrix, parallel Reviewers + Synthesizer.
-- Status Codes with cheap-model rotation, human-approved Escalation with Handoff, Ask Human and Loop Checkpoint.
-- Walkthrough, push, PR, Patch Plan loop, Correct-Course, done transition.
-- Memlog, Tool-Call Log, Run Metrics, Preferences and Pitfalls, Project Context.
-- Persona generator and Tier config.
-- Parallel Goal execution behind a flag (shipped last).
+Every feature in §4.1–4.13 (FR-1 … FR-51) and every NFR in §5, except §4.11 Parallel Goal Execution (FR-31–33), which is post-MVP. FR-3 is superseded; FR-42 fallback 2 is built only if the week-1 proof needs it.
 
 ### 8.2 Out of Scope for MVP
 
+- Parallel Goal execution (§4.11, FR-31–33: Claims, Launcher, Wave synthesis) — post-MVP; revisit once the sequential loop is stable.
+- Background process (daemon), Jira polling and webhooks — revisit only if CI results must be seen with VS Code closed or on-demand queries prove insufficient.
+- Cryptographic Server Record integrity (HMAC, hash chain) — revisit if the tool is ever shared or run where same-user tampering matters.
 - Multi-ticket sprint-status board — v2.
 - Composer-style ticket triage and right-sized scopes (bugfix/express paths) — v2.
 - Layered prompt customization (team/personal overrides) — later; high value.
@@ -860,8 +870,7 @@ What the MVP takes from each method. Every row is distilled into Agentflow tools
 - QA/PM Personas; review-only second-opinion agent before Escalation; party-mode debates; a model review of the Plan before its Gate.
 - Jira webhooks (the `TicketSource` interface allows them later).
 - Retrospectives posted to Jira.
-- Rework of a `done` Ticket moved back to In Execution (the Daemon does not re-select it).
-- Trivial fixes (handled outside the pipeline).
+- Rework of a `done` Ticket moved back to In Execution (`start-ticket` does not list it again).
 
 ## 9. Success Metrics
 
@@ -893,7 +902,9 @@ All figures come from local Run Metrics (FR-35).
 | Cheap-model over-confidence with no hard caps | Requests spent on loops that won't converge | Status Code rules (FR-16), cheap-model rotation, Loop Checkpoint (FR-45), escalation log |
 | Fresh-context Runs re-read inputs | Token cost grows with Ticket size | Input Bundles and Context Slices bounded by NFR-10; Review Bundles capped (FR-22) |
 | Detect-not-prevent residue | An unattributed edit is caught only at the next transition, not when made | Accepted for a personal tool; nothing leaves the machine without the `push` Gate |
-| MCP tool-call duration limits | Long `gate_request` or test runs time out | CI watch moved to the Daemon; OQ-13 |
+| MCP tool-call duration limits | Long `gate_request` or test runs time out | CI watch runs on an in-process timer, never inside a tool call; OQ-13 |
+| No background process | CI results and notifications are seen only while VS Code is open | `start-ticket` checks CI once on resume (FR-27); every wait is reported by `start-ticket` (FR-49) |
+| No cryptographic record integrity | A same-user process could edit `~/.agentflow/` undetected | Accepted for a personal tool: the threat is agent drift, and Copilot edit tools reach only the workspace (FR-48) |
 
 ## 11. Open Questions
 
@@ -902,8 +913,8 @@ All figures come from local Run Metrics (FR-35).
 3. **OQ-3:** Can the Conductor launch subagents with a pinned model per Run (needed for Tiers and cheap-model rotation), and can the Conductor itself be pinned to the cheap Tier?
 4. **OQ-4:** Which concrete models fill the Tiers? Candidates for cheap: Haiku 5.5, luna-6.
 5. **OQ-5:** What token budget per Review Bundle fits the cheap model's context window with room for output, and how many Reviewers per Ticket is worth the request cost? (Sets FR-22's limit.)
-6. **OQ-6 (resolved):** Which AI-DLC parts are worth porting? Answered by `research/aidlc-token-review.md`: port the architecture as tools, not the prose; applied as NFR-10, FR-5 chaining and FR-40–42.
-7. **OQ-7:** Can parallel subagents run concurrently in Copilot, and can the Conductor launch the next one when the server reports a Claim? (Affects FR-32.)
+6. **OQ-6 (resolved):** Which AI-DLC parts are worth porting? Per `research/aidlc-token-review.md`: the architecture as tools, not the prose (applied as NFR-10, FR-5 chaining, FR-40–42).
+7. **OQ-7 (post-MVP):** Can parallel subagents run concurrently in Copilot, and can the Conductor launch the next one when the server reports a Claim? (Affects FR-32.)
 8. **OQ-8:** Do Copilot custom agents and subagents enforce their declared tool allowlists? (Affects FR-40; if not, FR-41 detection is the only safeguard before push.)
 9. **OQ-9:** Can an elicitation prompt render a full Markdown Spec or Plan, and can it present a dynamic per-Assumption form (MCP elicitation schemas are flat)? If not, the Gate shows a file path and a short form. (Affects FR-9, FR-12.)
 10. **OQ-10:** Do VS Code auto-approve settings ("Always allow", `chat.tools.autoApprove`) bypass `gate_confirm`'s confirmation? (Affects FR-42.)
@@ -914,22 +925,15 @@ All figures come from local Run Metrics (FR-35).
 ## 12. Assumptions Index
 
 - FR-13 — Scenarios must state their expected observable assertion; this is how Plan-level prevention of vacuous tests is checked.
-- FR-17 — `red` Runs commit their failing tests on the Feature Branch.
 - FR-17 — files outside a Goal's `files` globs are committed with a warning at the `push` Gate (sequential mode), not refused.
 - FR-20 — a Failure Payload holds at most 20 failures by default.
 - FR-26 — the pipeline opens or updates the PR itself.
 - FR-26 — if the base branch advanced, the PR is opened anyway; no rebase in the MVP.
 - FR-27 — CI watch defaults: 30 s poll, 60 min max wait, 5 min no-run grace.
 - FR-30 — the Jira comment contains only the PR link.
-- FR-32 — only `green` Runs run in parallel; default Claim timeout is 120 s.
-- FR-33 — Wave synthesis conflicts go back to `green` with no automatic revert.
-- FR-40 — implementer, refactorer and escalation Personas get no general terminal tool.
-- FR-41 — failed Runs are reset to their start Snapshot and their diff stashed.
-- FR-42 — CLI fallback `agentflow approve` with a one-time code from the desktop notification.
-- FR-43 — one active Ticket per repo.
+- FR-32 (post-MVP) — default Claim timeout is 120 s.
+- FR-33 (post-MVP) — Wave synthesis conflicts go back to `green` with no automatic revert.
 - FR-46 — `start-ticket <KEY> --restart` archives a stopped Intent Record and starts a new one from `spec`.
-- FR-47 — test volume is one test per Scenario, not "happy path + 2 edge cases" per file.
-- FR-49 — notifications come from an OS notification library in the Daemon.
-- FR-51 — a Patch Plan is a delta, not a full replacement.
+- FR-49 — notifications come from an OS notification library inside the MCP server process.
 - NFR-10 — Context Slice sizes (Project Context 800, Preferences + Pitfalls 600, Memlog 600 tokens).
 - Addendum B — the MVP ships a test-output parser for Vitest/Jest JSON reporters only; other runners need a parser added.

@@ -56,11 +56,19 @@
 <!-- Format: NEVER [behavior] (affirmed [date]) -->
 <!-- Example: NEVER throw exceptions across service layer boundaries (affirmed 2026-05-17) -->
 
+- NEVER leave dead code behind. (affirmed 2026-11-13)
+
+- NEVER leave duplicated structure behind. (affirmed 2026-11-13)
+
 ## Mandated
 
 <!-- Populated by practices-discovery affirmation gate. -->
 <!-- Format: ALWAYS [behavior] (affirmed [date]) -->
 <!-- Example: ALWAYS use Result<T,E> for fallible operations in service layer (affirmed 2026-05-17) -->
+
+- ALWAYS write the failing test first, then make it pass, then refactor. (affirmed 2026-11-13)
+
+- ALWAYS commit in small, ordered commits. (affirmed 2026-11-13)
 
 ## Corrections
 

@@ -1,0 +1,337 @@
+{
+  "stage": "units-generation",
+  "upstream_ids": [
+    "FR1",
+    "FR2",
+    "FR3",
+    "FR4",
+    "FR5",
+    "FR6",
+    "FR7",
+    "FR8",
+    "FR9",
+    "FR10",
+    "FR11",
+    "FR12",
+    "FR13",
+    "FR14",
+    "FR15",
+    "FR16",
+    "FR17",
+    "FR18",
+    "FR19",
+    "FR20",
+    "FR21",
+    "FR22",
+    "FR23",
+    "FR24",
+    "FR25",
+    "FR26",
+    "FR27",
+    "FR28",
+    "FR29",
+    "FR30",
+    "FR31",
+    "FR32",
+    "FR33",
+    "FR34",
+    "FR35",
+    "FR36",
+    "FR37",
+    "FR38",
+    "FR39",
+    "FR40",
+    "FR41",
+    "FR42",
+    "FR43",
+    "FR44",
+    "FR45",
+    "FR46",
+    "FR47",
+    "FR48",
+    "FR49",
+    "FR50",
+    "FR51",
+    "NFR1",
+    "NFR3",
+    "NFR7",
+    "NFR10"
+  ],
+  "coverage": [
+    {
+      "id": "FR1",
+      "status": "OK",
+      "target": "U5"
+    },
+    {
+      "id": "FR2",
+      "status": "OK",
+      "target": "U5"
+    },
+    {
+      "id": "FR3",
+      "status": "OK",
+      "target": "U5"
+    },
+    {
+      "id": "FR4",
+      "status": "OK",
+      "target": "U2"
+    },
+    {
+      "id": "FR5",
+      "status": "OK",
+      "target": "U2"
+    },
+    {
+      "id": "FR6",
+      "status": "OK",
+      "target": "U2"
+    },
+    {
+      "id": "FR7",
+      "status": "OK",
+      "target": "U2"
+    },
+    {
+      "id": "FR8",
+      "status": "OK",
+      "target": "U4"
+    },
+    {
+      "id": "FR9",
+      "status": "OK",
+      "target": "U4"
+    },
+    {
+      "id": "FR10",
+      "status": "OK",
+      "target": "U4"
+    },
+    {
+      "id": "FR11",
+      "status": "OK",
+      "target": "U4"
+    },
+    {
+      "id": "FR12",
+      "status": "OK",
+      "target": "U4"
+    },
+    {
+      "id": "FR13",
+      "status": "OK",
+      "target": "U4"
+    },
+    {
+      "id": "FR14",
+      "status": "OK",
+      "target": "U4"
+    },
+    {
+      "id": "FR15",
+      "status": "OK",
+      "target": "U6"
+    },
+    {
+      "id": "FR16",
+      "status": "OK",
+      "target": "U6"
+    },
+    {
+      "id": "FR17",
+      "status": "OK",
+      "target": "U5"
+    },
+    {
+      "id": "FR18",
+      "status": "OK",
+      "target": "U6"
+    },
+    {
+      "id": "FR19",
+      "status": "OK",
+      "target": "U6"
+    },
+    {
+      "id": "FR20",
+      "status": "OK",
+      "target": "U6"
+    },
+    {
+      "id": "FR21",
+      "status": "OK",
+      "target": "U6"
+    },
+    {
+      "id": "FR22",
+      "status": "OK",
+      "target": "U7"
+    },
+    {
+      "id": "FR23",
+      "status": "OK",
+      "target": "U7"
+    },
+    {
+      "id": "FR24",
+      "status": "OK",
+      "target": "U7"
+    },
+    {
+      "id": "FR25",
+      "status": "OK",
+      "target": "U7"
+    },
+    {
+      "id": "FR26",
+      "status": "OK",
+      "target": "U8"
+    },
+    {
+      "id": "FR27",
+      "status": "OK",
+      "target": "U8"
+    },
+    {
+      "id": "FR28",
+      "status": "OK",
+      "target": "U8"
+    },
+    {
+      "id": "FR29",
+      "status": "OK",
+      "target": "U8"
+    },
+    {
+      "id": "FR30",
+      "status": "OK",
+      "target": "U8"
+    },
+    {
+      "id": "FR31",
+      "status": "Deferred",
+      "target": "post-MVP: parallel Goal execution (PRD 4.11)"
+    },
+    {
+      "id": "FR32",
+      "status": "Deferred",
+      "target": "post-MVP: parallel Goal execution (PRD 4.11)"
+    },
+    {
+      "id": "FR33",
+      "status": "Deferred",
+      "target": "post-MVP: parallel Goal execution (PRD 4.11)"
+    },
+    {
+      "id": "FR34",
+      "status": "OK",
+      "target": "U3"
+    },
+    {
+      "id": "FR35",
+      "status": "OK",
+      "target": "U8"
+    },
+    {
+      "id": "FR36",
+      "status": "OK",
+      "target": "U8"
+    },
+    {
+      "id": "FR37",
+      "status": "OK",
+      "target": "U9"
+    },
+    {
+      "id": "FR38",
+      "status": "OK",
+      "target": "U9"
+    },
+    {
+      "id": "FR39",
+      "status": "OK",
+      "target": "U9"
+    },
+    {
+      "id": "FR40",
+      "status": "OK",
+      "target": "U6"
+    },
+    {
+      "id": "FR41",
+      "status": "OK",
+      "target": "U5"
+    },
+    {
+      "id": "FR42",
+      "status": "OK",
+      "target": "U4"
+    },
+    {
+      "id": "FR43",
+      "status": "OK",
+      "target": "U5"
+    },
+    {
+      "id": "FR44",
+      "status": "OK",
+      "target": "U6"
+    },
+    {
+      "id": "FR45",
+      "status": "OK",
+      "target": "U2"
+    },
+    {
+      "id": "FR46",
+      "status": "OK",
+      "target": "U2"
+    },
+    {
+      "id": "FR47",
+      "status": "OK",
+      "target": "U6"
+    },
+    {
+      "id": "FR48",
+      "status": "OK",
+      "target": "U3"
+    },
+    {
+      "id": "FR49",
+      "status": "OK",
+      "target": "U8"
+    },
+    {
+      "id": "FR50",
+      "status": "OK",
+      "target": "U3"
+    },
+    {
+      "id": "FR51",
+      "status": "OK",
+      "target": "U4"
+    },
+    {
+      "id": "NFR1",
+      "status": "OK",
+      "target": "U6"
+    },
+    {
+      "id": "NFR3",
+      "status": "OK",
+      "target": "U1"
+    },
+    {
+      "id": "NFR7",
+      "status": "OK",
+      "target": "U1"
+    },
+    {
+      "id": "NFR10",
+      "status": "OK",
+      "target": "U6"
+    }
+  ]
+}
