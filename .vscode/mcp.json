@@ -1,0 +1,10 @@
+{
+  "servers": {
+    "agentflow": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["node_modules/tsx/dist/cli.mjs", "bin/mcp-server.ts"],
+      "cwd": "${workspaceFolder}"
+    }
+  }
+}

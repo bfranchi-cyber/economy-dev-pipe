@@ -1,5 +1,7 @@
 # BEGIN AI-DLC:gitignore
 # AI-DLC: local working files
+aidlc
+aidlc/spaces/*
 aidlc/active-space
 aidlc/spaces/*/intents/active-intent
 aidlc/.aidlc-clone-id
@@ -27,3 +29,6 @@ aidlc/diagnostics/
 # END AI-DLC:gitignore
 _bmad
 .claude
+node_modules/
+dist/
+coverage/
