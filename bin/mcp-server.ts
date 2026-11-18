@@ -83,7 +83,7 @@ async function main(): Promise<void> {
           })
           .optional(),
         run_id: z.string().optional(),
-        status: z.enum(['ok', 'blocked', 'failed']).optional(),
+        status: z.union([z.literal(0), z.literal(1), z.literal(2)]),
         summary: z.string().optional(),
         reason: z.string().optional(),
       },

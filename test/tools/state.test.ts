@@ -40,7 +40,7 @@ describe('state tools', () => {
     expect(second.data).toEqual(first.data);
   });
 
-  it('state_advance applies the report through decide and commits record.yml', async () => {
+  it('state_advance reports status 0 and state_get opens the spec Gate', async () => {
     const home = await createHome();
     const tools = createStateTools({ home, repoId: 'repo-a', bootId: 'boot-a' });
     const directive = await tools.state_get({ key: FAKE_TICKET_KEY });
@@ -49,13 +49,15 @@ describe('state tools', () => {
     const result = await tools.state_advance({
       key: FAKE_TICKET_KEY,
       run: directive.data.run,
-      status: 'ok',
+      status: 0,
     });
+    const next = await tools.state_get({ key: FAKE_TICKET_KEY });
     const record = await readFile(join(home, 'repo-a', FAKE_TICKET_KEY, 'record.yml'), 'utf8');
 
-    expect(result).toMatchObject({ ok: true, data: { state: { stage: 'done' } } });
-    expect(record).toContain('stage: done');
-    expect(record).toContain('G-1');
+    expect(result).toMatchObject({ ok: true, data: { state: { stage: 'spec' } } });
+    expect(next).toMatchObject({ ok: true, data: { type: 'open_gate', kind: 'spec' } });
+    expect(record).toContain('stage: spec');
+    expect(record).toContain('status: 0');
   });
 
   it('refuses Conductor-only calls carrying a run_id and logs the refusal', async () => {
@@ -80,7 +82,7 @@ describe('state tools', () => {
     const result = await newTools.state_advance({
       key: FAKE_TICKET_KEY,
       run: directive.data.run,
-      status: 'ok',
+      status: 0,
     });
 
     expect(result).toMatchObject({ ok: false, error: { code: 'E_STALE_RUN' } });
@@ -90,7 +92,7 @@ describe('state tools', () => {
     const home = await createHome();
     const tools = createStateTools({ home, repoId: 'repo-a', bootId: 'boot-a' });
     await tools.state_get({ key: FAKE_TICKET_KEY });
-    await tools.state_advance({ key: FAKE_TICKET_KEY, run_id: 'R-forbidden', status: 'ok' });
+    await tools.state_advance({ key: FAKE_TICKET_KEY, run_id: 'R-forbidden', status: 0 });
     const log = await readFile(join(home, 'repo-a', FAKE_TICKET_KEY, 'tool-calls.yml'), 'utf8');
 
     expect(log.match(/tool: state_get/g)).toHaveLength(1);
@@ -104,7 +106,7 @@ describe('state tools', () => {
     await tools.state_get({ key: FAKE_TICKET_KEY });
     const memlog = await readFile(join(home, 'repo-a', FAKE_TICKET_KEY, 'memlog.md'), 'utf8');
 
-    expect(memlog).toContain('G-3');
+    expect(memlog).toContain('G-1');
   });
 
   it('applies each report only once when a report is retried', async () => {
@@ -112,7 +114,7 @@ describe('state tools', () => {
     const tools = createStateTools({ home, repoId: 'repo-a', bootId: 'boot-a' });
     const directive = await tools.state_get({ key: FAKE_TICKET_KEY });
     if (!directive.ok || directive.data.type !== 'run_persona') throw new Error('Expected a Run');
-    const input = { key: FAKE_TICKET_KEY, run: directive.data.run, status: 'ok' as const };
+    const input = { key: FAKE_TICKET_KEY, run: directive.data.run, status: 0 as const };
 
     const first = await tools.state_advance(input);
     const replay = await tools.state_advance(input);

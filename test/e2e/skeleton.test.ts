@@ -62,13 +62,17 @@ describe('MCP skeleton', () => {
       const advanced = parseToolResult(
         await client.callTool({
           name: 'state_advance',
-          arguments: { key: 'FAKE-1', run: issued.data.run, status: 'ok' },
+          arguments: { key: 'FAKE-1', run: issued.data.run, status: 0 },
         }),
       );
-      expect(advanced).toMatchObject({ ok: true, data: { state: { stage: 'done' } } });
+      expect(advanced).toMatchObject({ ok: true, data: { state: { stage: 'spec' } } });
+      const next = parseToolResult(
+        await client.callTool({ name: 'state_get', arguments: { key: 'FAKE-1' } }),
+      );
+      expect(next).toMatchObject({ ok: true, data: { type: 'open_gate', kind: 'spec' } });
       const record = await readFile(join(home, 'agentflow', 'FAKE-1', 'record.yml'), 'utf8');
-      expect(record).toContain('stage: done');
-      expect(record).toContain('G-1');
+      expect(record).toContain('stage: spec');
+      expect(record).toContain('status: 0');
     } finally {
       await client.close();
     }

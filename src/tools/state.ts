@@ -4,11 +4,16 @@ import { z } from 'zod';
 import { decide } from '../engine/decide.js';
 import { DEFAULT_GRAPH } from '../engine/stage-graph.js';
 import {
+  EffectSchema,
   EventSchema,
   RunSchema,
+  StateSchema,
+  StatusCodeSchema,
+  type Effect,
   type ErrorCode,
   type Run,
   type State,
+  type StatusCode,
   type ToolEnvelope,
 } from '../engine/schemas.js';
 import { appendMemlog, appendToolCall } from '../store/append-log.js';
@@ -23,7 +28,7 @@ const AdvanceInputSchema = z
     key: z.string().min(1),
     run: RunSchema.optional(),
     run_id: z.string().optional(),
-    status: z.enum(['ok', 'blocked', 'failed']).optional(),
+    status: StatusCodeSchema,
     summary: z.string().optional(),
     reason: z.string().optional(),
   })
@@ -32,8 +37,7 @@ const AdvanceInputSchema = z
 interface TicketRecord {
   boot_id: string;
   state: State;
-  next_run: number;
-  last_advance?: { run_id: string; status: string; envelope: ToolEnvelope<unknown> };
+  last_advance?: { run_id: string; status: StatusCode; envelope: ToolEnvelope<unknown> };
 }
 
 export interface StateToolsOptions {
@@ -44,18 +48,25 @@ export interface StateToolsOptions {
   ids?: () => string;
 }
 
-export type Directive =
-  | { type: 'run_persona'; run: Run }
-  | { type: 'open_gate'; stage: string }
-  | { type: 'wait'; reason: string }
-  | { type: 'end'; stage: string };
+export type Directive = Effect;
 
 function errorResult(code: ErrorCode, message: string): ToolEnvelope<never> {
   return fail({ code, message });
 }
 
 function initialRecord(bootId: string): TicketRecord {
-  return { boot_id: bootId, state: { stage: 'start' }, next_run: 1 };
+  return { boot_id: bootId, state: StateSchema.parse({ stage: 'start' }) };
+}
+
+function gateForStage(state: State): string | undefined {
+  return Object.entries(DEFAULT_GRAPH.gates).find(([, gate]) => gate?.stage === state.stage)?.[0];
+}
+
+function completedGateRun(state: State, run: Run, status: StatusCode): State | undefined {
+  if (!state.run || state.run.id !== run.id || state.run.stage !== state.stage) return undefined;
+  const gateKind = gateForStage(state);
+  if (status !== 0 || !gateKind) return undefined;
+  return { ...state, run: undefined };
 }
 
 export function createStateTools(options: StateToolsOptions) {
@@ -90,30 +101,53 @@ export function createStateTools(options: StateToolsOptions) {
     return withTicketMutex(`${options.repoId}/${key}`, async () => {
       const record = await loadTicket(key);
       if (!record) return errorResult('E_RECORD_CORRUPT', 'Ticket record is unavailable.');
-      const { state } = record;
-      if (state.run) return ok({ type: 'run_persona', run: state.run });
-      if (state.stage === 'done') return ok({ type: 'end', stage: state.stage });
-      if (state.stage === 'ask_human') return ok({ type: 'open_gate', stage: state.stage });
-      if (state.stage !== 'start') return ok({ type: 'wait', reason: 'run' });
-
-      const decision = decide(state, { type: 'start' }, DEFAULT_GRAPH, { now: now(), ids });
-      if (!decision.row_id || decision.error) {
-        return errorResult(
-          decision.error?.code ?? 'E_INVALID_TRANSITION',
-          decision.error?.message ?? 'Cannot start Run.',
-        );
+      const state = StateSchema.parse(record.state);
+      if (state.run) return ok(EffectSchema.parse({ type: 'run_persona', run: state.run }));
+      const decision = decide(
+        state,
+        EventSchema.parse({ type: 'start_ticket', ticket_key: key }),
+        DEFAULT_GRAPH,
+        { now: now(), ids },
+      );
+      if (!decision.error && decision.row_id) {
+        const effect = decision.effects[0];
+        if (!effect) return errorResult('E_INVALID_TRANSITION', 'Stage Graph produced no effect.');
+        const nextState =
+          effect.type === 'run_persona' ? { ...decision.state, run: effect.run } : decision.state;
+        const committed = await store.commit(key, { ...record, state: nextState });
+        if (!committed.ok) return errorResult(committed.error.code, committed.error.message);
+        if (effect.type === 'run_persona') {
+          await appendMemlog(ticketPath(key, 'memlog.md'), {
+            timestamp: now(),
+            row_id: decision.row_id,
+            message: `Started ${effect.run.stage} Run ${effect.run.id}.`,
+          });
+        }
+        return ok(effect);
       }
-      const run = decision.state.run;
-      if (!run) return errorResult('E_INVALID_TRANSITION', 'Stage Graph did not produce a Run.');
-      const committed = await store.commit(key, { ...record, state: decision.state });
-      if (!committed.ok) return errorResult(committed.error.code, committed.error.message);
-      await appendMemlog(ticketPath(key, 'memlog.md'), {
-        timestamp: now(),
-        row_id: decision.row_id,
-        message: `Started ${run.stage} Run ${run.id}.`,
-      });
-      return ok({ type: 'run_persona', run });
+      const effect = nextEffect(state);
+      return effect ? ok(effect) : errorResult('E_INVALID_TRANSITION', 'No effect is available.');
     });
+  }
+
+  function nextEffect(state: State): Effect | undefined {
+    if (state.run) return EffectSchema.parse({ type: 'run_persona', run: state.run });
+    const reason = state.waits[0];
+    if (reason === 'ci_running') return EffectSchema.parse({ type: 'wait', reason });
+    if (reason) {
+      const kind = reason === 'ask_human' ? 'ask_human' : reason.slice(5);
+      return EffectSchema.parse({ type: 'open_gate', kind });
+    }
+    const kind = gateForStage(state);
+    if (kind) return EffectSchema.parse({ type: 'open_gate', kind });
+    const owner = DEFAULT_GRAPH.stages[state.stage]?.owner;
+    if (owner === 'tool' && !DEFAULT_GRAPH.stages[state.stage]?.terminal) {
+      return EffectSchema.parse({ type: 'run_tool', tool: state.stage });
+    }
+    if (DEFAULT_GRAPH.stages[state.stage]?.terminal || state.stage === 'stopped') {
+      return EffectSchema.parse({ type: 'end', stage: state.stage });
+    }
+    return undefined;
   }
 
   async function advanceState(
@@ -127,7 +161,7 @@ export function createStateTools(options: StateToolsOptions) {
         return errorResult('E_STALE_RUN', 'The Ticket record belongs to another server boot.');
       }
       const { run, status } = input;
-      if (!run || !status)
+      if (!run || status === undefined)
         return errorResult('E_INVALID_TRANSITION', 'state_advance requires a Run and status.');
       if (!record.state.run || record.state.run.id !== run.id) {
         const replay = record.last_advance;
@@ -137,6 +171,7 @@ export function createStateTools(options: StateToolsOptions) {
         return errorResult('E_STALE_RUN', 'The Run is not active for this Ticket.');
       }
 
+      const reportState = StateSchema.parse(record.state);
       const event = EventSchema.parse({
         type: 'run_report',
         run_id: run.id,
@@ -144,26 +179,33 @@ export function createStateTools(options: StateToolsOptions) {
         ...(input.summary === undefined ? {} : { summary: input.summary }),
         ...(input.reason === undefined ? {} : { reason: input.reason }),
       });
-      const decision = decide(record.state, event, DEFAULT_GRAPH, { now: now(), ids });
-      if (!decision.row_id || decision.error) {
+      const decision = decide(reportState, event, DEFAULT_GRAPH, {
+        now: now(),
+        ids,
+      });
+      const completedGate = decision.error ? completedGateRun(reportState, run, status) : undefined;
+      if ((!decision.row_id || decision.error) && !completedGate) {
         return errorResult(
           decision.error?.code ?? 'E_INVALID_TRANSITION',
           decision.error?.message ?? 'Cannot advance State.',
         );
       }
-      const success = ok({ state: decision.state });
+      const nextState = completedGate ?? decision.state;
+      const success = ok({ state: nextState });
       const nextRecord: TicketRecord = {
         ...record,
-        state: decision.state,
+        state: nextState,
         last_advance: { run_id: run.id, status, envelope: success },
       };
       const committed = await store.commit(key, nextRecord);
       if (!committed.ok) return errorResult(committed.error.code, committed.error.message);
-      await appendMemlog(ticketPath(key, 'memlog.md'), {
-        timestamp: now(),
-        row_id: decision.row_id,
-        message: `Reported ${status} for ${run.id}; State is ${decision.state.stage}.`,
-      });
+      if (decision.row_id) {
+        await appendMemlog(ticketPath(key, 'memlog.md'), {
+          timestamp: now(),
+          row_id: decision.row_id,
+          message: `Reported ${status} for ${run.id}; State is ${nextState.stage}.`,
+        });
+      }
       return success;
     });
   }
